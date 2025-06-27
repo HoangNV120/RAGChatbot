@@ -21,7 +21,7 @@ class Settings(BaseSettings):
 
     # LLM settings
     model_name: str = os.getenv("MODEL_NAME", "gpt-4o-mini")
-    temperature: float = float(os.getenv("TEMPERATURE", "0.2"))
+    temperature: float = float(os.getenv("TEMPERATURE", "0.1"))
 
     # Embedding settings
     embedding_model: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")  # OpenAI's small embedding model
