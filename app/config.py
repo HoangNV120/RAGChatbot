@@ -10,6 +10,12 @@ class Settings(BaseSettings):
     # OpenAI API key
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
 
+    # LangSmith settings
+    langsmith_api_key: str = os.getenv("LANGSMITH_API_KEY", "")
+    langsmith_project: str = os.getenv("LANGSMITH_PROJECT", "rag-chatbot")
+    langsmith_endpoint: str = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
+    langsmith_tracing: bool = os.getenv("LANGSMITH_TRACING", "True").lower() == "true"
+
     # Qdrant settings
     qdrant_url: str = os.getenv("QDRANT_URL", "http://localhost:6333")
     qdrant_api_key: Optional[str] = os.getenv("QDRANT_API_KEY")

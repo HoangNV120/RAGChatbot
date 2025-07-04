@@ -9,6 +9,7 @@ langchain-postgres
 langchain-pinecone
 langgraph
 langgraph-checkpoint-sqlite
+langsmith
 openpyxl
 fastapi
 fastembed
@@ -37,3 +38,4 @@ pdfplumber
 pymupdf
 pillow
 pytesseract
+
