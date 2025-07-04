@@ -18,17 +18,17 @@ class QueryRouter:
 
 Quy tắc phân loại:
 1. RULE_BASED: Dành cho các câu hỏi đơn giản, FAQ cơ bản như:
-   - Câu hỏi về thời gian (giờ học, lịch thi, deadline)
    - Câu hỏi về địa điểm (phòng học, tòa nhà)
-   - Câu hỏi về điểm số, học phí cơ bản
+   - Câu hỏi về các thủ tục hành chính
+   - Câu hỏi về học phí cơ bản
    - Câu hỏi ngắn gọn, rõ ràng (< 15 từ)
    - Câu hỏi có thể trả lời bằng thông tin cố định
 
 2. RAG_CHAT: Dành cho các câu hỏi phức tạp như:
    - Câu hỏi dài, nhiều chi tiết (> 15 từ)
    - Câu hỏi yêu cầu giải thích, phân tích
-   - Câu hỏi về quy trình, thủ tục phức tạp
-   - Câu hỏi kết hợp nhiều khái niệm
+   - Câu hỏi liên quan đến môn học theo từ thường hoặc regex r'^[A-ZĐ]{{3}}\d{{3}}[a-z]?$'
+ hoặc có từ "LUK" (ví dụ: MLN121 ,ENW492c, LUK2, toán học, ...), khung chương trình
    - Câu hỏi cần tìm kiếm thông tin trong tài liệu
 
 Chỉ trả về: RULE_BASED hoặc RAG_CHAT

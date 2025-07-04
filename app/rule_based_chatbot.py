@@ -111,7 +111,6 @@ class RuleBasedChatbot:
                               r'ùúụủũưừứựửữỳýỵỷỹđ]', text)) >= 3
 
     async def chatbot_response(self, user_input):
-        """Logic xử lý chatbot giữ nguyên như cũ nhưng với async/await"""
         if not await self.is_meaningful(user_input):
             return await self.fallback_response()
 

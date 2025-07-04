@@ -1,9 +1,10 @@
-from langchain_community.document_loaders import DirectoryLoader, TextLoader
+from langchain_community.document_loaders import DirectoryLoader, TextLoader, JSONLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from app.vector_store import VectorStore
 import os
 import asyncio
 import pandas as pd
+import re
 from langchain.schema import Document
 
 class DocumentProcessor:
@@ -25,10 +26,33 @@ class DocumentProcessor:
         )
         self.vector_store = VectorStore()
 
+    def _determine_document_type(self, filename: str) -> str:
+        """
+        Xác định loại tài liệu dựa trên tên file:
+        - Syllabus: nếu có pattern [3 chữ in hoa có thể có Đ][3 số][có thể có 1 chữ thường] hoặc chứa "LUK"
+        - Curriculum: các file JSON khác
+        """
+        # Bỏ extension .json
+        name_without_ext = filename.replace('.json', '')
+
+        # Pattern cho Syllabus: 3 chữ in hoa (có thể có Đ) + 3 số + có thể c�� 1 chữ thường
+        syllabus_pattern = r'^[A-ZĐ]{3}\d{3}[a-z]?$'
+
+        # Kiểm tra pattern cho Syllabus
+        if re.match(syllabus_pattern, name_without_ext):
+            return "Syllabus"
+
+        # Kiểm tra chứa "LUK"
+        if "LUK" in name_without_ext.upper():
+            return "Syllabus"
+
+        # Mặc định là Curriculum
+        return "Curriculum"
+
     async def load_and_process_documents(self):
         """
-        Load documents from the data directory, split them into chunks,
-        and store them in the vector database
+        Load JSON documents from the data directory, split them into chunks,
+        and store them in the vector database with proper metadata
         """
         # Check if directory exists
         if not os.path.exists(self.data_dir):
@@ -39,86 +63,89 @@ class DocumentProcessor:
         # List files in directory to verify
         print(f"Files in directory: {os.listdir(self.data_dir)}")
 
-        # Load documents from directory using appropriate encoding
+        documents = []
+
         try:
-            # Create a custom TextLoader class with UTF-8 encoding
-            class UTF8TextLoader(TextLoader):
-                def __init__(self, file_path):
-                    super().__init__(file_path, encoding="utf-8", autodetect_encoding=True)
+            # Tìm tất cả file JSON trong thư mục
+            json_files = [f for f in os.listdir(self.data_dir) if f.endswith('.json')]
 
-            # Use the custom loader class
-            loader = DirectoryLoader(
-                self.data_dir,
-                glob="**/*.txt",
-                loader_cls=UTF8TextLoader,
-                show_progress=True
-            )
-
-            print(f"Loading files from {self.data_dir}...")
-            # Run in a thread pool to avoid blocking the event loop
-            documents = await asyncio.get_event_loop().run_in_executor(None, loader.load)
-            print(f"Loaded {len(documents)} documents")
-
-            if not documents:
-                print("No documents found in the data directory")
+            if not json_files:
+                print("No JSON files found in the data directory")
                 return []
 
-            # Split documents into chunks (run in executor to avoid blocking)
+            print(f"Found {len(json_files)} JSON files")
+
+            for json_file in json_files:
+                file_path = os.path.join(self.data_dir, json_file)
+
+                try:
+                    # Xác định metadata
+                    name = json_file.replace('.json', '')  # Tên file bỏ .json
+                    doc_type = self._determine_document_type(json_file)
+
+                    print(f"Processing {json_file} - Name: {name}, Type: {doc_type}")
+
+                    # Sử dụng JSONLoader để load file
+                    loader = JSONLoader(
+                        file_path=file_path,
+                        jq_schema='.',  # Load toàn bộ JSON content
+                        text_content=False
+                    )
+
+                    # Load documents từ JSON file
+                    file_documents = await asyncio.get_event_loop().run_in_executor(
+                        None, loader.load
+                    )
+
+                    # Thêm metadata cho mỗi document
+                    for doc in file_documents:
+                        doc.metadata.update({
+                            "name": name,
+                            "type": doc_type
+                        })
+                        documents.append(doc)
+
+                    print(f"Successfully loaded {json_file} with {len(file_documents)} documents")
+
+                except Exception as file_error:
+                    print(f"Error loading file {json_file}: {str(file_error)}")
+                    continue
+
+            if not documents:
+                print("No documents were successfully loaded")
+                return []
+
+            print(f"Total loaded {len(documents)} documents from {len(json_files)} JSON files")
+
+            # Split documents into chunks
             splits = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: self.text_splitter.split_documents(documents)
             )
 
-            # Add documents to vector store - sửa lỗi ở đây
-            await self.vector_store.add_documents(splits)
+            # Thêm tên file vào đầu mỗi chunk để dễ tìm kiếm
+            enhanced_splits = []
+            for split in splits:
+                # Lấy tên file từ metadata
+                file_name = split.metadata.get("name", "unknown")
 
-            print(f"Processed {len(documents)} documents, created {len(splits)} chunks")
-            return splits
+                # Thêm tên file vào đầu content
+                enhanced_content = f"{file_name} : {split.page_content}"
+
+                # Tạo document mới với content đã được enhance
+                enhanced_split = Document(
+                    page_content=enhanced_content,
+                    metadata=split.metadata
+                )
+                enhanced_splits.append(enhanced_split)
+
+            # Add documents to vector store
+            await self.vector_store.add_documents(enhanced_splits)
+
+            print(f"Processed {len(documents)} documents, created {len(enhanced_splits)} chunks with file names prefixed")
+            return enhanced_splits
 
         except Exception as e:
-            print(f"Error loading documents: {str(e)}")
-            # Try to load individual files with different encodings as a fallback
-            try:
-                print("Attempting to load files individually...")
-                documents = []
-                for filename in os.listdir(self.data_dir):
-                    if filename.endswith('.txt'):
-                        file_path = os.path.join(self.data_dir, filename)
-                        try:
-                            # Try different encodings
-                            for encoding in ['utf-8-sig', 'utf-8', 'utf-16', 'cp1258']:
-                                try:
-                                    print(f"Trying to load {filename} with {encoding} encoding")
-                                    text = await asyncio.get_event_loop().run_in_executor(
-                                        None,
-                                        lambda: open(file_path, 'r', encoding=encoding).read()
-                                    )
-
-                                    documents.append(Document(
-                                        page_content=text,
-                                        metadata={"source": file_path}
-                                    ))
-                                    print(f"Successfully loaded {filename} with {encoding} encoding")
-                                    break
-                                except UnicodeDecodeError:
-                                    continue
-                        except Exception as file_error:
-                            print(f"Error loading file {filename}: {str(file_error)}")
-
-                if documents:
-                    # Split documents into chunks
-                    splits = await asyncio.get_event_loop().run_in_executor(
-                        None, lambda: self.text_splitter.split_documents(documents)
-                    )
-
-                    # Add documents to vector store - sửa lỗi ở đây
-                    await self.vector_store.add_documents(splits)
-
-                    print(f"Processed {len(documents)} documents, created {len(splits)} chunks")
-                    return splits
-
-            except Exception as fallback_error:
-                print(f"Fallback loading failed: {str(fallback_error)}")
-
+            print(f"Error processing JSON documents: {str(e)}")
             return []
 
     async def load_and_process_excel(self, excel_path=None):
@@ -173,7 +200,8 @@ class DocumentProcessor:
                         row_docs.append(Document(
                             page_content=content,
                             metadata={
-                                "source": f"{excel_path}:row{idx+2}"
+                                "name": "FQA",
+                                "type": "FQA"
                             }
                         ))
                 return row_docs
@@ -234,3 +262,4 @@ if __name__ == "__main__":
 
     # To process both:
     asyncio.run(processor.load_and_process_all())
+

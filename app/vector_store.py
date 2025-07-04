@@ -11,11 +11,12 @@ class VectorStore:
         # Initialize the embedding model (using OpenAI's small model)
         self.embeddings = OpenAIEmbeddings(
             model=settings.embedding_model,
-            api_key=settings.openai_api_key
+            # model="text-embedding-3-large",
+            api_key=settings.openai_api_key,
         )
 
         # Initialize sparse embeddings for hybrid search
-        self.sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25")
+        # self.sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25")
 
         # Initialize Qdrant client
         self.client = QdrantClient(
@@ -33,15 +34,15 @@ class VectorStore:
                 collection_name=settings.collection_name,
                 vectors_config={
                     "dense": models.VectorParams(
-                        size=1536,  # Dimension for OpenAI's embeddings
-                        distance=models.Distance.COSINE
+                        size=3072,  # Dimension for OpenAI's embeddings
+                        distance=models.Distance.DOT
                     )
                 },
-                sparse_vectors_config={
-                    "sparse": models.SparseVectorParams(
-                        index=models.SparseIndexParams(on_disk=False)
-                    )
-                }
+                # sparse_vectors_config={
+                #     "sparse": models.SparseVectorParams(
+                #         index=models.SparseIndexParams(on_disk=False)
+                #     )
+                # }
             )
             print(f"Created new Qdrant collection: {settings.collection_name}")
 
@@ -50,16 +51,19 @@ class VectorStore:
             client=self.client,
             collection_name=settings.collection_name,
             embedding=self.embeddings,
-            sparse_embedding=self.sparse_embeddings,
-            retrieval_mode=RetrievalMode.HYBRID,
+            # sparse_embedding=self.sparse_embeddings,
+            # retrieval_mode=RetrievalMode.HYBRID,
+            retrieval_mode=RetrievalMode.DENSE,
             vector_name="dense",
-            sparse_vector_name="sparse",
-            content_payload_key="page_content"
+            # sparse_vector_name="sparse",
+            content_payload_key="page_content",
+            distance=models.Distance.DOT
         )
 
-    async def similarity_search(self, query, k=4):
+    async def similarity_search(self, query, k=2):
         """
         Search for similar documents in the vector store
+
 
         Args:
             query (str): The query text
@@ -73,7 +77,7 @@ class VectorStore:
             None, lambda: self.vector_store.similarity_search(query, k=k)
         )
 
-    async def similarity_search_with_score(self, query, k=4):
+    async def similarity_search_with_score(self, query, k=2):
         """
         Search for similar documents in the vector store and return scores
 
@@ -101,6 +105,3 @@ class VectorStore:
         return await asyncio.get_event_loop().run_in_executor(
             None, lambda: self.vector_store.add_documents(documents)
         )
-
-
-

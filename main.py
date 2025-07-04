@@ -66,7 +66,11 @@ async def chat(request: ChatRequest):
     Output format: {"output": "response text"}
     """
     if not request.chatInput:
-        raise HTTPException(status_code=400, detail="Chat input cannot be empty")
+        raise HTTPException(status_code=400, detail="Bạn chưa nhập câu hỏi. Vui lòng nhập câu hỏi để mình có thể hỗ trợ bạn nhé!")
+
+    # Giới hạn độ dài chatInput tối đa 255 ký tự
+    if len(request.chatInput) > 255:
+        raise HTTPException(status_code=400, detail="Câu hỏi quá dài (tối đa 255 ký tự). Bạn vui lòng rút gọn lại để mình có thể hỗ trợ tốt hơn nhé!")
 
     # Generate response using the Master Chatbot
     response = await master_chatbot.generate_response(
