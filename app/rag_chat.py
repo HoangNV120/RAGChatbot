@@ -39,7 +39,7 @@ Mục tiêu: trả lời chính xác, đầy đủ, không chứa thông tin kh�
 
 Quy tắc:
 1. Dùng đại từ "bạn / mình".
-2. Nếu chưa chắc thông tin, chỉ nói "Mình chưa có dữ liệu, bạn liên hệ Phòng CTSV."
+2. Nếu chưa chắc thông tin, chỉ nói "Mình chưa có dữ liệu, bạn vui lòng liên hệ Phòng CTSV nhé."
 3. Không thêm lời chào, cảm ơn hoặc đề nghị không nằm trong context.
 4. Không thêm câu hỏi, đề xuất hay hướng dẫn nếu không có trong context.
 
@@ -67,7 +67,7 @@ Thông tin truy xuất:
 
 Câu hỏi: {question}
 
-Hãy trả lời câu hỏi dựa trên thông tin trong context. Nếu context có thông tin liên quan, hãy sử dụng nó để trả lời. Chỉ trả lời "Mình chưa có dữ liệu, bạn liên hệ Phòng CTSV." khi context hoàn toàn không có thông tin liên quan đến câu hỏi."""
+Hãy trả lời câu hỏi dựa trên thông tin trong context. Nếu context có thông tin liên quan, hãy sử dụng nó để trả lời. Chỉ trả lời "Mình chưa có dữ liệu, bạn vui lòng liên hệ Phòng CTSV nhé." khi context hoàn toàn không có thông tin liên quan đến câu hỏi."""
         )
 
         # Khởi tạo LangGraph với memory để lưu lịch sử theo thread_id

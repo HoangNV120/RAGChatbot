@@ -6,6 +6,11 @@ import asyncio
 import pandas as pd
 import re
 from langchain.schema import Document
+import pdfplumber
+import fitz  # PyMuPDF
+from PIL import Image
+import io
+import pytesseract
 
 class DocumentProcessor:
     def __init__(self, data_dir="data"):
@@ -239,9 +244,153 @@ class DocumentProcessor:
             traceback.print_exc()
             return []
 
+    async def load_and_process_pdf(self):
+        """
+        Load PDF files from the data directory, convert to documents with metadata
+        name as filename and type as "Decision", and add to vector store
+        """
+        try:
+            # Check if directory exists
+            if not os.path.exists(self.data_dir):
+                os.makedirs(self.data_dir)
+                print(f"Created data directory at {self.data_dir}")
+                return []
+
+            # Find all PDF files in the directory
+            pdf_files = [f for f in os.listdir(self.data_dir) if f.endswith('.pdf')]
+
+            if not pdf_files:
+                print("No PDF files found in the data directory")
+                return []
+
+            print(f"Found {len(pdf_files)} PDF files")
+
+            documents = []
+
+            for pdf_file in pdf_files:
+                file_path = os.path.join(self.data_dir, pdf_file)
+
+                try:
+                    # Get filename without extension for metadata
+                    name = pdf_file.replace('.pdf', '')
+
+                    print(f"Processing {pdf_file} - Name: {name}, Type: Decision")
+
+                    # First try with pdfplumber
+                    full_text = ""
+                    try:
+                        with pdfplumber.open(file_path) as pdf:
+                            for page in pdf.pages:
+                                text = page.extract_text()
+                                if text:
+                                    full_text += text + "\n"
+                    except Exception as e:
+                        print(f"pdfplumber failed: {e}")
+
+                    print(f"pdfplumber extracted: {len(full_text)} characters")
+
+                    # If no text found, try OCR with PyMuPDF
+                    if not full_text.strip():
+                        print("Attempting OCR extraction...")
+                        try:
+                            # Use PyMuPDF for OCR
+                            pdf_document = fitz.open(file_path)
+                            ocr_text = ""
+
+                            for page_num in range(len(pdf_document)):
+                                page = pdf_document.load_page(page_num)
+
+                                # Convert page to image
+                                mat = fitz.Matrix(2, 2)  # 2x zoom for better OCR
+                                pix = page.get_pixmap(matrix=mat)
+                                img_data = pix.tobytes("png")
+
+                                # Convert to PIL Image
+                                img = Image.open(io.BytesIO(img_data))
+
+                                # Use OCR to extract text
+                                try:
+                                    page_text = pytesseract.image_to_string(img, lang='vie+eng')
+                                    if page_text.strip():
+                                        ocr_text += page_text + "\n"
+                                        print(f"OCR Page {page_num + 1}: {len(page_text)} characters")
+                                except Exception as ocr_error:
+                                    print(f"OCR failed for page {page_num + 1}: {ocr_error}")
+                                    continue
+
+                            pdf_document.close()
+
+                            if ocr_text.strip():
+                                full_text = ocr_text
+                                print(f"OCR total extracted: {len(full_text)} characters")
+                            else:
+                                print("OCR extraction failed - no text found")
+
+                        except Exception as ocr_error:
+                            print(f"OCR process failed: {ocr_error}")
+
+                    if full_text.strip():
+                        # Create a single document for the entire PDF
+                        doc = Document(
+                            page_content=full_text.strip(),
+                            metadata={
+                                "name": name,
+                                "type": "Decision"
+                            }
+                        )
+                        documents.append(doc)
+                        print(f"Document created with {len(full_text)} characters")
+                    else:
+                        print(f"No text content found in {pdf_file} even after OCR")
+
+                    print(f"Successfully processed {pdf_file}")
+
+                except Exception as file_error:
+                    print(f"Error loading file {pdf_file}: {str(file_error)}")
+                    continue
+
+            if not documents:
+                print("No documents were successfully loaded")
+                return []
+
+            print(f"Total loaded {len(documents)} documents from {len(pdf_files)} PDF files")
+
+            # Split documents into chunks
+            splits = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: self.text_splitter.split_documents(documents)
+            )
+
+            # Add filename prefix to each chunk for better search
+            enhanced_splits = []
+            for split in splits:
+                # Get filename from metadata
+                file_name = split.metadata.get("name", "unknown")
+
+                # Add filename to the beginning of content
+                enhanced_content = f"{file_name} : {split.page_content}"
+
+                # Create new document with enhanced content
+                enhanced_split = Document(
+                    page_content=enhanced_content,
+                    metadata=split.metadata
+                )
+                enhanced_splits.append(enhanced_split)
+
+            # Add documents to vector store
+            await self.vector_store.add_documents(enhanced_splits)
+
+            print(f"Processed {len(documents)} PDF documents, created {len(enhanced_splits)} chunks with file names prefixed")
+            return enhanced_splits
+
+        except Exception as e:
+            print(f"Error processing PDF documents: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return []
+
     async def load_and_process_all(self):
         """
-        Load and process both text documents and Excel data
+        Load and process text documents, Excel data, and PDF data
         """
         # Load text documents
         text_docs = await self.load_and_process_documents()
@@ -249,7 +398,10 @@ class DocumentProcessor:
         # Load Excel data
         excel_docs = await self.load_and_process_excel()
 
-        return text_docs + excel_docs
+        # Load PDF data
+        pdf_docs = await self.load_and_process_pdf()
+
+        return text_docs + excel_docs + pdf_docs
 
 # Add this if you want to test the document processor directly
 if __name__ == "__main__":
@@ -260,6 +412,8 @@ if __name__ == "__main__":
     # To process only Excel:
     # asyncio.run(processor.load_and_process_excel())
 
-    # To process both:
-    asyncio.run(processor.load_and_process_all())
+    # To process only PDF:
+    # asyncio.run(processor.load_and_process_pdf())
 
+    # To process all:
+    asyncio.run(processor.load_and_process_all())

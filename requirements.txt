@@ -32,3 +32,8 @@ psycopg2-binary
 sqlalchemy
 psycopg[binary]
 pinecone-client
+pypdf
+pdfplumber
+pymupdf
+pillow
+pytesseract
