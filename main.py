@@ -7,6 +7,17 @@ from app.document_processor import DocumentProcessor
 import uvicorn
 from contextlib import asynccontextmanager
 import os
+import logging
+
+# Cấu hình logging để hiển thị log routing
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # Global variables để store instances
 master_chatbot = None
@@ -30,7 +41,7 @@ async def lifespan(app: FastAPI):
 
     # Load documents into the vector database
     print("Loading documents into the vector database...")
-    await doc_processor.load_and_process_all()
+    await doc_processor.load_and_process_all_with_routing()
     print("✅ Documents loaded and indexed in the vector database")
     print("✅ RAG Chatbot is ready!")
 

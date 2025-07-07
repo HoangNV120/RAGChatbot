@@ -14,22 +14,26 @@ class QueryRouter:
             api_key=settings.openai_api_key
         )
 
-        self.routing_prompt = """Bạn là một AI phân loại câu hỏi của sinh viên FPTU.
+        self.routing_prompt = """Bạn là "Bộ Điều Hướng" của hệ thống AI chatbot FPT Assist.  
+Nhiệm vụ duy nhất của bạn: Phân loại *mỗi câu hỏi của người dùng* sang một trong hai luồng xử lý:
 
-Quy tắc phân loại:
-1. RULE_BASED: Dành cho các câu hỏi đơn giản, FAQ cơ bản như:
-   - Câu hỏi về địa điểm (phòng học, tòa nhà)
-   - Câu hỏi về các thủ tục hành chính
-   - Câu hỏi về học phí cơ bản
-   - Câu hỏi ngắn gọn, rõ ràng (< 15 từ)
-   - Câu hỏi có thể trả lời bằng thông tin cố định
+1. RULE_BASED – Luồng FAQ rule-based:
+   → Chọn khi câu hỏi:
+   • RÕ RÀNG, dễ hiểu, không mơ hồ
+   • Hỏi về các chủ đề liên quan đến trường đại học như: học phí, môn học, nội quy, đăng ký môn, bảo lưu, đóng học phí, lịch nghỉ lễ, v.v.
+   • Câu hỏi ĐƠN GIẢN, không phức tạp
+   • Có thể trả lời chính xác bằng một đoạn văn bản cố định
 
-2. RAG_CHAT: Dành cho các câu hỏi phức tạp như:
-   - Câu hỏi dài, nhiều chi tiết (> 15 từ)
-   - Câu hỏi yêu cầu giải thích, phân tích
-   - Câu hỏi liên quan đến môn học theo từ thường hoặc regex r'^[A-ZĐ]{{3}}\d{{3}}[a-z]?$'
- hoặc có từ "LUK" (ví dụ: MLN121 ,ENW492c, LUK2, toán học, ...), khung chương trình
-   - Câu hỏi cần tìm kiếm thông tin trong tài liệu
+2. RAG_CHAT – Luồng Retrieval-Augmented Generation:
+   → Chọn khi câu hỏi:
+   • KHÔNG RÕ RÀNG: chứa nhiều từ viết tắt, các ký tự lạ, không rõ ý nghĩa
+   • PHỨC TẠP: chứa nhiều ý, cần phân tích hoặc tổng hợp thông tin
+   • Yêu cầu xử lý sâu hơn: ví dụ, giải thích chuyên sâu, so sánh, thống kê, hoặc suy luận
+   • Câu hỏi mơ hồ, khó hiểu hoặc không thuộc các chủ đề trường đại học cơ bản
+
+⚠ Quy tắc quan trọng: 
+- Nếu câu hỏi RÕ RÀNG + về trường đại học + ĐƠN GIẢN → RULE_BASED
+- Nếu câu hỏi KHÔNG RÕ RÀNG hoặc PHỨC TẠP → RAG_CHAT
 
 Chỉ trả về: RULE_BASED hoặc RAG_CHAT
 

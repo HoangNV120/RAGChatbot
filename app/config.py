@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     qdrant_api_key: Optional[str] = os.getenv("QDRANT_API_KEY")
     collection_name: str = os.getenv("COLLECTION_NAME", "ragchatbot")
 
+    # Routing collection settings
+    routing_collection_name: str = os.getenv("ROUTING_COLLECTION_NAME", "routing_questions")
+    routing_similarity_threshold: float = float(os.getenv("ROUTING_SIMILARITY_THRESHOLD", "0.8"))
+
     # Chroma settings (local vector store)
     chroma_persist_directory: str = os.getenv("CHROMA_PERSIST_DIRECTORY", "./chroma_db")
 

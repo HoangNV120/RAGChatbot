@@ -1,6 +1,7 @@
 from langchain_community.document_loaders import DirectoryLoader, TextLoader, JSONLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from app.vector_store import VectorStore
+from app.smart_router import SmartQueryRouter
 import os
 import asyncio
 import pandas as pd
@@ -30,6 +31,9 @@ class DocumentProcessor:
             length_function=len,
         )
         self.vector_store = VectorStore()
+
+        # Initialize Smart Router for routing questions
+        self.smart_router = SmartQueryRouter()
 
     def _determine_document_type(self, filename: str) -> str:
         """
@@ -388,20 +392,120 @@ class DocumentProcessor:
             traceback.print_exc()
             return []
 
-    async def load_and_process_all(self):
+    async def load_routing_questions_from_excel(self, excel_path=None):
         """
-        Load and process text documents, Excel data, and PDF data
+        Load questions from data.xlsx file and add them to the routing vector store
         """
+        try:
+            # If path not provided, use the data_router.xlsx file in app/data directory
+            if excel_path is None:
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                excel_path = os.path.join(current_dir, 'data', 'data_router.xlsx')
+
+            if not os.path.exists(excel_path):
+                print(f"File not found: {excel_path}")
+                return False
+
+            print(f"Loading routing questions from Excel file: {excel_path}")
+
+            # Load Excel file asynchronously
+            df = await asyncio.get_event_loop().run_in_executor(None, lambda: pd.read_excel(excel_path))
+            print(f"Excel file loaded with {len(df)} rows")
+
+            # Check if required columns exist
+            required_columns = ['question', 'answer']
+            missing_columns = [col for col in required_columns if col not in df.columns]
+
+            if missing_columns:
+                print(f"Excel file must contain columns: {required_columns}")
+                print(f"Missing columns: {missing_columns}")
+                print(f"Available columns: {list(df.columns)}")
+                return False
+
+            # Convert Excel data to routing questions format
+            routing_questions = []
+
+            for idx, row in df.iterrows():
+                try:
+                    # Get question and answer
+                    question = str(row['question']).strip()
+                    answer = str(row['answer']).strip()
+
+                    # Skip empty rows
+                    if not question or question.lower() in ['nan', 'none', '']:
+                        continue
+
+                    # Handle multiple questions separated by '|'
+                    questions = [q.strip() for q in question.split('|') if q.strip()]
+
+                    for q in questions:
+                        # Determine category if available
+                        category = "general"
+                        if 'category' in df.columns:
+                            category = str(row['category']).strip()
+                            if category.lower() in ['nan', 'none', '']:
+                                category = "general"
+
+                        routing_questions.append({
+                            "question": q,
+                            "category": category
+                        })
+
+                except Exception as row_error:
+                    print(f"Error processing row {idx}: {row_error}")
+                    continue
+
+            if not routing_questions:
+                print("No valid routing questions found in Excel file")
+                return False
+
+            print(f"Prepared {len(routing_questions)} routing questions")
+
+            # Add questions to routing vector store
+            success = await self.smart_router.add_routing_questions(routing_questions)
+
+            if success:
+                print(f"✅ Successfully added {len(routing_questions)} routing questions to vector store")
+
+                # Get stats after adding
+                stats = await self.smart_router.get_routing_stats()
+                print(f"📊 Routing Vector Store Stats: {stats}")
+
+                return True
+            else:
+                print("❌ Failed to add routing questions to vector store")
+                return False
+
+        except Exception as e:
+            print(f"Error loading routing questions from Excel: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    async def load_and_process_all_with_routing(self):
+        """
+        Load and process all documents including routing questions
+        """
+        print("=== Loading Routing Questions ===")
+        routing_success = await self.load_routing_questions_from_excel()
+
+        print("\n=== Loading Regular Documents ===")
         # Load text documents
         text_docs = await self.load_and_process_documents()
 
-        # Load Excel data
+        # Load Excel data for RAG
         excel_docs = await self.load_and_process_excel()
 
         # Load PDF data
         pdf_docs = await self.load_and_process_pdf()
 
-        return text_docs + excel_docs + pdf_docs
+        total_docs = text_docs + excel_docs + pdf_docs
+
+        print(f"\n=== Summary ===")
+        print(f"Routing questions loaded: {'✅' if routing_success else '❌'}")
+        print(f"Total RAG documents processed: {len(total_docs)}")
+
+        return total_docs
 
 # Add this if you want to test the document processor directly
 if __name__ == "__main__":
@@ -416,4 +520,4 @@ if __name__ == "__main__":
     # asyncio.run(processor.load_and_process_pdf())
 
     # To process all:
-    asyncio.run(processor.load_and_process_all())
+    asyncio.run(processor.load_and_process_all_with_routing())
