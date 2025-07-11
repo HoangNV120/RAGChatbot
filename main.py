@@ -29,21 +29,22 @@ async def lifespan(app: FastAPI):
     global master_chatbot, doc_processor
 
     # Startup: Initialize components
-    print("🚀 Initializing RAG Chatbot components...")
+    print("🚀 Initializing Category-based + RAG Chatbot components...")
 
-    # Create document processor
+    # Khởi tạo Document processor và vector store cho RAG
     data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app", "data")
     print(f"Setting data directory to: {data_dir}")
     doc_processor = DocumentProcessor(data_dir=data_dir)
 
-    # Initialize Master Chatbot
+    # Initialize Master Chatbot với vector_store
     master_chatbot = MasterChatbot(vector_store=doc_processor.vector_store)
 
-    # Load documents into the vector database
+    # Load documents vào vector database cho RAG
     print("Loading documents into the vector database...")
-    await doc_processor.load_and_process_all_with_routing()
+    await doc_processor.load_and_process_excel()  # Load từ data_test.xlsx
     print("✅ Documents loaded and indexed in the vector database")
-    print("✅ RAG Chatbot is ready!")
+    
+    print("✅ Category-based + RAG Chatbot is ready!")
 
     yield
 

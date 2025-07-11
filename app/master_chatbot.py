@@ -1,9 +1,9 @@
 from typing import Dict, Optional
 import logging
 
-from app.smart_router import SmartQueryRouter
-from app.rag_chat import RAGChat
-from app.rule_based_chatbot import AdvancedChatbot
+from app.category_router import CategoryRouter
+from app.rag_chat import RAGChat  # KÍCH HOẠT LẠI
+# from app.rule_based_chatbot import AdvancedChatbot  # TẮT TẠM THỜI
 from app.safety_guard import SafetyGuard
 from app.config import settings
 
@@ -18,14 +18,14 @@ class MasterChatbot:
         # Khởi tạo safety guard - kiểm tra đầu tiên
         self.safety_guard = SafetyGuard()
 
-        # Khởi tạo router
-        self.router = SmartQueryRouter()
+        # Khởi tạo category router - thay thế smart router
+        self.router = CategoryRouter()
 
-        # Khởi tạo RAG Chat
+        # KÍCH HOẠT LẠI RAG Chat để xử lý category KHÁC
         self.rag_chat = RAGChat(vector_store=vector_store)
 
-        # Khởi tạo Rule-based chatbot - sử dụng class mới
-        self.rule_based_chatbot = AdvancedChatbot()
+        # TẮT TẠM THỜI Rule-based chatbot
+        # self.rule_based_chatbot = AdvancedChatbot()
 
     async def generate_response(self, query: str, session_id: Optional[str] = None) -> Dict:
         """
@@ -48,29 +48,35 @@ class MasterChatbot:
             route = routing_result["route"]
 
             # Log routing information
-            logger.info(f"Smart routing result: {routing_result}")
+            logger.info(f"Category routing result: {routing_result}")
             print(f"Query routed to: {route}")
-            print(f"Routing reason: {routing_result.get('reason', 'N/A')}")
-            if 'similarity_score' in routing_result:
-                print(f"Similarity score: {routing_result['similarity_score']:.3f}")
+            print(f"Category: {routing_result.get('category', 'N/A')}")
+            if route == "CATEGORY_BASED":
+                print(f"Matched question: {routing_result.get('matched_question', 'N/A')}")
 
-            if route == "RULE_BASED":
-                # Sử dụng rule-based chatbot với câu hỏi được router chọn
-                query_to_use = routing_result["query"]  # Câu hỏi tìm được từ DB
-                answer = await self.rule_based_chatbot.get_response(query_to_use)
+            if route == "CATEGORY_BASED":
+                # Trả về câu trả lời trực tiếp từ database theo category
                 return {
-                    "output": answer,
-                    "session_id": session_id or "rule-based-session",
-                    "route_used": "RULE_BASED",
+                    "output": routing_result["answer"],
+                    "session_id": session_id or "category-based-session",
+                    "route_used": "CATEGORY_BASED",
                     "routing_info": routing_result
                 }
-            else:
-                # Sử dụng RAG chat với câu hỏi gốc
+            elif route == "RAG_CHAT":
+                # Sử dụng RAG chat cho category KHÁC hoặc không tìm thấy match
                 query_to_use = routing_result["query"]  # Câu hỏi gốc
                 result = await self.rag_chat.generate_response(query_to_use, session_id)
                 result["route_used"] = "RAG_CHAT"
                 result["routing_info"] = routing_result
                 return result
+            else:
+                # Fallback case
+                return {
+                    "output": "🤖 Xin lỗi, tôi chưa thể trả lời câu hỏi này. Bạn có thể hỏi về các chủ đề như: ngành học, quy chế thi, điểm số, học phí, dịch vụ sinh viên, hoặc cơ sở vật chất.",
+                    "session_id": session_id or "fallback-session",
+                    "route_used": "FALLBACK",
+                    "routing_info": routing_result
+                }
 
         except Exception as e:
             logger.error(f"Error in master chatbot: {e}")
