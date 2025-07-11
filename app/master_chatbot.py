@@ -184,6 +184,14 @@ class MasterChatbot:
                 result["classification"] = classification_result
                 result["ragsmall_error"] = str(e)
                 return result
+            else:
+                # Fallback case
+                return {
+                    "output": "🤖 Xin lỗi, tôi chưa thể trả lời câu hỏi này. Bạn có thể hỏi về các chủ đề như: ngành học, quy chế thi, điểm số, học phí, dịch vụ sinh viên, hoặc cơ sở vật chất.",
+                    "session_id": session_id or "fallback-session",
+                    "route_used": "FALLBACK",
+                    "routing_info": routing_result
+                }
 
         except Exception as e:
             logger.error(f"Error in master chatbot: {e}")
