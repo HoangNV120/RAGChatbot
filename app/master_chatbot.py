@@ -1,8 +1,8 @@
 from typing import Dict, Optional
 import logging
 
-from app.category_router import CategoryRouter
-from app.rag_chat import RAGChat  # KÍCH HOẠT LẠI
+from app.category_partitioned_router import CategoryPartitionedRouter
+from app.rag_chat import RAGChat
 # from app.rule_based_chatbot import AdvancedChatbot  # TẮT TẠM THỜI
 from app.safety_guard import SafetyGuard
 from app.config import settings
@@ -18,10 +18,10 @@ class MasterChatbot:
         # Khởi tạo safety guard - kiểm tra đầu tiên
         self.safety_guard = SafetyGuard()
 
-        # Khởi tạo category router - thay thế smart router
-        self.router = CategoryRouter()
+        # Khởi tạo category-partitioned router với pre-categorized data
+        self.router = CategoryPartitionedRouter(use_categorized_data=True)
 
-        # KÍCH HOẠT LẠI RAG Chat để xử lý category KHÁC
+        # KÍCH HOẠT LẠI RAG Chat để xử lý category KHÁC và fallback
         self.rag_chat = RAGChat(vector_store=vector_store)
 
         # TẮT TẠM THỜI Rule-based chatbot
@@ -48,22 +48,33 @@ class MasterChatbot:
             route = routing_result["route"]
 
             # Log routing information
-            logger.info(f"Category routing result: {routing_result}")
+            logger.info(f"Optimized routing result: {routing_result}")
             print(f"Query routed to: {route}")
-            print(f"Category: {routing_result.get('category', 'N/A')}")
-            if route == "CATEGORY_BASED":
-                print(f"Matched question: {routing_result.get('matched_question', 'N/A')}")
+            
+            # Hiển thị thông tin classification
+            if "classification" in routing_result:
+                classification = routing_result["classification"]
+                print(f"LLM Classification: {classification.get('category', 'N/A')}")
+            
+            # Hiển thị thông tin similarity và category match nếu có
+            if "similarity_score" in routing_result and routing_result["similarity_score"] > 0:
+                print(f"Vector similarity: {routing_result['similarity_score']:.3f}")
+                
+            if route == "VECTOR_BASED":
+                matched_category = routing_result.get('matched_category', 'N/A')
+                print(f"Matched in category: {matched_category}")
+                print(f"Matched question: {routing_result.get('matched_question', 'N/A')[:50]}...")
 
-            if route == "CATEGORY_BASED":
-                # Trả về câu trả lời trực tiếp từ database theo category
+            if route == "VECTOR_BASED":
+                # Trả về câu trả lời trực tiếp từ vector similarity search
                 return {
                     "output": routing_result["answer"],
-                    "session_id": session_id or "category-based-session",
-                    "route_used": "CATEGORY_BASED",
+                    "session_id": session_id or "vector-based-session",
+                    "route_used": "VECTOR_BASED",
                     "routing_info": routing_result
                 }
             elif route == "RAG_CHAT":
-                # Sử dụng RAG chat cho category KHÁC hoặc không tìm thấy match
+                # Sử dụng RAG chat cho category KHÁC hoặc vector similarity thấp trong optimized partition
                 query_to_use = routing_result["query"]  # Câu hỏi gốc
                 result = await self.rag_chat.generate_response(query_to_use, session_id)
                 result["route_used"] = "RAG_CHAT"
