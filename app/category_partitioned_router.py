@@ -93,7 +93,6 @@ class CategoryPartitionedRouter:
         except Exception as e:
             print(f"❌ Error loading data: {e}")
             raise
-
     async def _classify_query_category(self, query: str) -> Dict:
         """Bước 1: Phân loại category bằng LLM với Prompt Engineering cao cấp"""
         
