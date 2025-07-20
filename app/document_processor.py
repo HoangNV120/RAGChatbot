@@ -166,8 +166,8 @@ class DocumentProcessor:
             # If path not provided, try multiple locations for data_test.xlsx
             if excel_path is None:
                 current_dir = os.path.dirname(os.path.abspath(__file__))
-                possible_paths = [  # app/data_test.xlsx
-                    os.path.join(self.data_dir, 'data_test.xlsx')  # app/data/data_test.xlsx  # RAGChatbotai/data_test.xlsx
+                possible_paths = [
+                    os.path.join(self.data_dir, 'data_test.xlsx'),  # app/data/data_test.xlsx
                 ]
 
                 # Try each path until we find the file
@@ -199,6 +199,13 @@ class DocumentProcessor:
             async def process_row(idx, row):
                 questions = str(row['question']).split('|')
                 answer = str(row['answer'])
+                
+                # Extract category if available
+                category = "general"
+                if 'category' in df.columns:
+                    category = str(row['category']).strip()
+                    if category.lower() in ['nan', 'none', '']:
+                        category = "general"
 
                 row_docs = []
                 for q in questions:
@@ -210,7 +217,9 @@ class DocumentProcessor:
                             page_content=content,
                             metadata={
                                 "name": "FQA",
-                                "type": "FQA"
+                                "type": "FQA",
+                                "category": category,
+                                "answer": answer
                             }
                         ))
                 return row_docs

@@ -35,7 +35,7 @@ class VectorStore:
                 vectors_config={
                     "dense": models.VectorParams(
                         size=3072,  # Dimension for OpenAI's embeddings
-                        distance=models.Distance.DOT
+                        distance=models.Distance.COSINE
                     )
                 },
                 # sparse_vectors_config={
@@ -57,7 +57,7 @@ class VectorStore:
             vector_name="dense",
             # sparse_vector_name="sparse",
             content_payload_key="page_content",
-            distance=models.Distance.DOT
+            distance=models.Distance.COSINE
         )
 
     async def similarity_search(self, query, k=2):

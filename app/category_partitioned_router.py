@@ -21,11 +21,11 @@ class CategoryPartitionedRouter:
     4. Tìm similarity trong partition, nếu đủ cao → trả answer, nếu không → RAG_CHAT
     """
     
-    def __init__(self, use_categorized_data=True):
+    def __init__(self, vector_store=None, use_categorized_data=True):
         # Initialize LLM cho classification
         self.llm = ChatOpenAI(
             openai_api_key=settings.openai_api_key,
-            model_name="gpt-3.5-turbo",
+            model_name="gpt-4o-mini",
             temperature=0
         )
         
@@ -35,12 +35,17 @@ class CategoryPartitionedRouter:
             model="text-embedding-ada-002"
         )
         
-        # Load data - ưu tiên data có category
+        # Use existing vector store (Qdrant) instead of local cache
+        self.vector_store = vector_store
+        if not self.vector_store:
+            raise ValueError("Vector store (Qdrant) is required for CategoryPartitionedRouter")
+        
+        # Load data for category information only (không cần embed lại)
         self.use_categorized_data = use_categorized_data
         self.data = self._load_data()
         
         # Similarity threshold cho vector search
-        self.similarity_threshold = 0.9
+        self.similarity_threshold = 0.8
         
         # Định nghĩa các category hợp lệ
         self.valid_categories = [
@@ -48,15 +53,16 @@ class CategoryPartitionedRouter:
             "DỊCH VỤ SINH VIÊN", "CƠ SỞ VẬT CHẤT", "CHƯƠNG TRÌNH HỌC"
         ]
         
-        # Cache cho embeddings theo category
-        self.category_embeddings = {}  # {category: numpy_array}
-        self.category_questions_data = {}  # {category: [question_data]}
-        
         # Cache cho classification results để tăng tốc độ và consistency
         self.classification_cache = {}  # {query_hash: classification_result}
         
+        # Cache cho vector search results (optional)
+        self.vector_search_cache = {}  # {query_hash: vector_search_result}
+        self.cache_expiry_time = 3600  # 1 hour cache expiry
+        
         print(f"CategoryPartitionedRouter initialized with {len(self.data)} questions")
         print(f"Valid categories: {self.valid_categories}")
+        print(f"✅ Using existing Qdrant vector store for category-partitioned search")
         
         # Hiển thị thống kê category
         if 'category' in self.data.columns:
@@ -87,7 +93,7 @@ class CategoryPartitionedRouter:
         except Exception as e:
             print(f"❌ Error loading data: {e}")
             raise
-    
+
     async def _classify_query_category(self, query: str) -> Dict:
         """Bước 1: Phân loại category bằng LLM với Prompt Engineering cao cấp"""
         
@@ -143,357 +149,182 @@ class CategoryPartitionedRouter:
    • Tin tức, công nghệ không liên quan học tập
    • Câu hỏi cá nhân không về trường học
 
-🎯 QUY TRÌNH PHÂN LOẠI (Thực hiện tuần tự):
-
-BƯỚC 1: Xác định từ khóa chính trong câu hỏi
-BƯỚC 2: Đối chiếu với 7 danh mục trên (ưu tiên theo thứ tự)
-BƯỚC 3: Nếu không khớp → chọn "KHÁC"
-BƯỚC 4: Double-check kết quả
-
-⚠️ QUY TẮC VÀNG:
-- CHỈ trả về TÊN DANH MỤC (viết hoa, không dấu phẩy, không giải thích)
-- Nếu có thể thuộc 2 danh mục → chọn danh mục chính yếu nhất
-- Khi nghi ngờ → chọn "KHÁC"
-- KHÔNG bao giờ tự tạo danh mục mới
-
-📝 MẪU PHẢN HỒI ĐÚNG:
-- Input: "Học phí ngành CNTT?" → Output: "HỌC PHÍ"
-- Input: "Thời tiết hôm nay?" → Output: "KHÁC"
-- Input: "Lịch thi cuối kỳ?" → Output: "QUY CHẾ THI"
-
 CHỈ TRẢ VỀ TÊN DANH MỤC DUY NHẤT - KHÔNG GIẢI THÍCH GÌ THÊM."""
 
         try:
-            # 🎯 FEW-SHOT EXAMPLES để tăng consistency
-            few_shot_examples = [
-                ("Học phí ngành Công nghệ thông tin bao nhiêu?", "HỌC PHÍ"),
-                ("Các ngành học tại trường có gì?", "NGÀNH HỌC"),
-                ("Điều kiện thi tốt nghiệp là gì?", "QUY CHẾ THI"),
-                ("Thang điểm tại trường như thế nào?", "ĐIỂM SỐ"),
-                ("Làm sao để đăng ký học phần?", "DỊCH VỤ SINH VIÊN"),
-                ("Thư viện trường có mở cửa không?", "CƠ SỞ VẬT CHẤT"),
-                ("Lịch học môn Toán là gì?", "CHƯƠNG TRÌNH HỌC"),
-                ("Hôm nay trời đẹp quá!", "KHÁC")
-            ]
-            
-            # Tạo few-shot prompt
-            few_shot_prompt = "\n".join([
-                f"Ví dụ: \"{ex[0]}\" → {ex[1]}" for ex in few_shot_examples
-            ])
-            
-            # 🧠 ENHANCED PROMPT với few-shot và reasoning
-            enhanced_system_prompt = system_prompt + f"""
-
-🎓 CÁC VÍ DỤ CHUẨN (học từ các trường hợp này):
-{few_shot_prompt}
-
-🔍 QUY TRÌNH TƒRANG LOGIC:
-1. Đọc câu hỏi → Tìm từ khóa chính
-2. So sánh với 8 ví dụ trên → Tìm mẫu tương tự
-3. Áp dụng logic tương tự → Đưa ra quyết định
-4. Kiểm tra lại → Đảm bảo đúng format
-
-⚡ LƯU Ý QUAN TRỌNG:
-- Phân tích CHÍNH XÁC như các ví dụ trên
-- Phản hồi ĐỒNG NHẤT với training pattern
-- KHÔNG thay đổi cách phân loại so với examples"""
-
             messages = [
-                SystemMessage(content=enhanced_system_prompt),
+                SystemMessage(content=system_prompt),
                 HumanMessage(content=f"Phân loại câu hỏi: \"{query}\"")
             ]
             
-            # 🚀 DOUBLE-CHECK CLASSIFICATION với temperature=0 để consistency
             response = await self.llm.agenerate([messages])
             category = response.generations[0][0].text.strip().upper()
-            
-            # 🎯 VALIDATION & NORMALIZATION
-            # Loại bỏ các ký tự không mong muốn
             category = category.replace(".", "").replace(",", "").replace(":", "").strip()
             
-            # 📝 KEYWORD-BASED FALLBACK để đảm bảo consistency
-            query_lower = query.lower()
-            keyword_mapping = {
-                "HỌC PHÍ": ["học phí", "chi phí", "tiền", "đóng học", "miễn giảm", "học bổng", "phí"],
-                "NGÀNH HỌC": ["ngành", "chuyên ngành", "khoa", "đào tạo", "liên thông", "chuyên môn"],
-                "QUY CHẾ THI": ["thi", "kiểm tra", "tốt nghiệp", "quy chế", "điều kiện", "quy định"],
-                "ĐIỂM SỐ": ["điểm", "gpa", "thang điểm", "xếp loại", "học lực", "đánh giá"],
-                "DỊCH VỤ SINH VIÊN": ["đăng ký", "thủ tục", "hỗ trợ", "dịch vụ", "tư vấn", "hành chính"],
-                "CƠ SỞ VẬT CHẤT": ["phòng", "thư viện", "ký túc xá", "cơ sở", "trang thiết bị", "khuôn viên"],
-                "CHƯƠNG TRÌNH HỌC": ["môn học", "tín chỉ", "lịch học", "thời khóa biểu", "chương trình", "khung"]
-            }
-            
-            # 🔍 CONSISTENCY CHECK: So sánh LLM result với keyword matching
-            keyword_category = None
-            max_matches = 0
-            
-            for cat, keywords in keyword_mapping.items():
-                matches = sum(1 for keyword in keywords if keyword in query_lower)
-                if matches > max_matches:
-                    max_matches = matches
-                    keyword_category = cat
-            
-            # 🎯 FINAL DECISION với priority rules
-            final_category = category
-            
-            # Rule 1: Nếu LLM classification không hợp lệ, dùng keyword fallback
-            if category not in self.valid_categories and category != "KHÁC":
-                if keyword_category and max_matches >= 1:
-                    final_category = keyword_category
-                    print(f"🔄 LLM classification '{category}' invalid, using keyword fallback: '{keyword_category}'")
-                else:
-                    final_category = "KHÁC"
-                    print(f"🔄 LLM classification '{category}' invalid, no keywords found → KHÁC")
-            
-            # Rule 2: Cross-validation - nếu có conflict mạnh, ưu tiên keyword
-            elif keyword_category and keyword_category != category and max_matches >= 2:
-                print(f"🎯 Strong keyword evidence for '{keyword_category}' vs LLM '{category}', using keywords")
-                final_category = keyword_category
-            
-            # 📊 LOG DECISION PROCESS
-            print(f"🏷️  Classification result:")
-            print(f"   LLM: {category}")
-            print(f"   Keywords: {keyword_category} (matches: {max_matches})")
-            print(f"   Final: {final_category}")
-            
-            # Kiểm tra category có hợp lệ không
-            result = None
-            if final_category in self.valid_categories:
+            # Validate category
+            if category in self.valid_categories:
                 result = {
-                    "category": final_category,
+                    "category": category,
                     "is_valid": True,
-                    "should_use_vector": True,
-                    "llm_category": category,
-                    "keyword_category": keyword_category,
-                    "keyword_matches": max_matches
+                    "should_use_vector": True
                 }
             else:
                 result = {
                     "category": "KHÁC",
                     "is_valid": False,
-                    "should_use_vector": False,
-                    "llm_category": category,
-                    "keyword_category": keyword_category,
-                    "keyword_matches": max_matches
+                    "should_use_vector": False
                 }
             
-            # 💾 CACHE RESULT để consistency
+            # Cache result
             self.classification_cache[query_hash] = result
-            
             return result
                 
         except Exception as e:
             logger.error(f"Error in LLM classification: {e}")
-            print(f"❌ LLM classification error: {e}")
-            # Fallback: coi như category KHÁC
             return {
                 "category": "KHÁC",
                 "is_valid": False,
                 "should_use_vector": False,
                 "error": str(e)
             }
-    
-    async def _get_or_assign_category(self, question: str, row_index: int) -> str:
-        """Lấy category từ data hoặc gán mới nếu chưa có (tối ưu hóa)"""
-        
-        # Nếu data đã có category column và có giá trị hợp lệ
-        if 'category' in self.data.columns:
-            existing_category = self.data.iloc[row_index].get('category', '')
-            if pd.notna(existing_category) and str(existing_category).strip():
-                category = str(existing_category).strip().upper()
-                # Kiểm tra category có trong danh sách hợp lệ không
-                if category in self.valid_categories:
-                    return category
-                elif category == "KHÁC":
-                    return "KHÁC"
-        
-        # Nếu chưa có hoặc không hợp lệ, phân loại bằng LLM (chậm)
-        print(f"🔄 Auto-categorizing question: {question[:50]}...")
-        classification = await self._classify_query_category(question)
-        return classification["category"]
-    
-    async def _initialize_category_embeddings(self, target_category: str):
-        """Khởi tạo embeddings cho một category cụ thể"""
-        
-        if target_category in self.category_embeddings:
-            return  # Đã khởi tạo rồi
-        
-        print(f"🔄 Initializing embeddings for category: {target_category}")
-        
-        # Lọc và chuẩn bị câu hỏi cho category này
-        category_questions = []
-        category_data = []
-        
-        for idx, row in self.data.iterrows():
-            question = str(row['question']).strip()
-            answer = str(row['answer']).strip()
-            source = str(row.get('nguồn', '')).strip()
-            
-            if not question or not answer:
-                continue
-            
-            # Lấy hoặc gán category
-            row_category = await self._get_or_assign_category(question, idx)
-            
-            # Chỉ lấy câu hỏi thuộc category này
-            if row_category == target_category:
-                # Xử lý multiple questions (nếu có dấu |)
-                question_parts = [q.strip() for q in question.split('|') if q.strip()]
-                
-                for q in question_parts:
-                    category_questions.append(q)
-                    category_data.append({
-                        'original_index': idx,
-                        'question': q,
-                        'answer': answer,
-                        'source': source,
-                        'category': row_category
-                    })
-        
-        if not category_questions:
-            print(f"⚠️  No questions found for category: {target_category}")
-            self.category_embeddings[target_category] = np.array([])
-            self.category_questions_data[target_category] = []
-            return
-        
-        print(f"📊 Processing {len(category_questions)} questions for category {target_category}")
-        
-        # Tạo embeddings cho category này
-        try:
-            # Batch processing để tối ưu
-            batch_size = 50
-            all_embeddings = []
-            
-            for i in range(0, len(category_questions), batch_size):
-                batch = category_questions[i:i + batch_size]
-                print(f"   Processing batch {i//batch_size + 1}/{(len(category_questions) + batch_size - 1)//batch_size}")
-                
-                # Get embeddings for batch
-                batch_embeddings = await self.embeddings.aembed_documents(batch)
-                all_embeddings.extend(batch_embeddings)
-                
-                # Small delay to avoid rate limiting
-                await asyncio.sleep(0.1)
-            
-            # Cache embeddings và data
-            self.category_embeddings[target_category] = np.array(all_embeddings)
-            self.category_questions_data[target_category] = category_data
-            
-            print(f"✅ Created embeddings for {len(category_questions)} questions in category {target_category}")
-            print(f"📐 Embedding dimension: {self.category_embeddings[target_category].shape[1]}")
-            
-        except Exception as e:
-            logger.error(f"Error creating embeddings for category {target_category}: {e}")
-            print(f"❌ Error creating embeddings for category {target_category}: {e}")
-            raise
-    
-    async def _get_query_embedding(self, query: str) -> np.ndarray:
-        """Lấy embedding cho câu hỏi input"""
-        try:
-            embedding = await self.embeddings.aembed_query(query)
-            return np.array(embedding)
-        except Exception as e:
-            logger.error(f"Error getting query embedding: {e}")
-            raise
-    
-    def _find_most_similar_in_category(self, query_embedding: np.ndarray, category: str, top_k: int = 5) -> List[Tuple[int, float, Dict]]:
-        """Tìm câu hỏi tương tự nhất trong một category cụ thể"""
-        
-        if category not in self.category_embeddings or len(self.category_embeddings[category]) == 0:
-            return []
-        
-        category_embed = self.category_embeddings[category]
-        category_data = self.category_questions_data[category]
-        
-        # Tính cosine similarity chỉ trong category này
-        similarities = cosine_similarity([query_embedding], category_embed)[0]
-        
-        # Lấy top_k câu hỏi có similarity cao nhất
-        top_indices = np.argsort(similarities)[::-1][:top_k]
-        
-        results = []
-        for idx in top_indices:
-            similarity_score = similarities[idx]
-            question_data = category_data[idx]
-            
-            results.append((idx, similarity_score, question_data))
-        
-        return results
-    
+
     async def _vector_search_in_category(self, query: str, category: str) -> Dict:
-        """Bước 3: Vector search trong category partition cụ thể"""
+        """Bước 3: Vector search trong category partition với post-filtering"""
         
-        # Khởi tạo embeddings cho category này
-        await self._initialize_category_embeddings(category)
+        print(f"🔍 Vector search in category '{category}' using Qdrant for query: {query[:50]}...")
         
-        print(f"🔍 Vector search in category '{category}' for query: {query[:50]}...")
-        
-        # Kiểm tra có data cho category này không
-        if category not in self.category_questions_data or len(self.category_questions_data[category]) == 0:
-            print(f"❌ No data found for category: {category}")
-            return {
-                "route": "RAG_CHAT",
-                "reason": f"No questions found in category {category}",
-                "similarity_score": 0.0
-            }
-        
-        # Lấy embedding cho câu hỏi input
-        query_embedding = await self._get_query_embedding(query)
-        
-        # Tìm câu hỏi tương tự nhất trong category này
-        similar_questions = self._find_most_similar_in_category(query_embedding, category, top_k=3)
-        
-        if not similar_questions:
-            print(f"❌ No similar questions found in category {category}")
-            return {
-                "route": "RAG_CHAT",
-                "reason": f"No similar questions in category {category}",
-                "similarity_score": 0.0
-            }
-        
-        # Lấy câu hỏi có similarity cao nhất
-        best_idx, best_similarity, best_question_data = similar_questions[0]
-        
-        print(f"📊 Best similarity in category '{category}': {best_similarity:.3f}")
-        print(f"🔍 Best match: {best_question_data['question'][:50]}...")
-        
-        # Quyết định dựa trên threshold
-        if best_similarity >= self.similarity_threshold:
-            print(f"✅ Found good match in category '{category}' (similarity: {best_similarity:.3f} >= {self.similarity_threshold})")
+        try:
+            # Thực hiện similarity search sử dụng VectorStore wrapper với async method
+            results = await self.vector_store.similarity_search_with_score(
+                query=query,
+                k=50  # Lấy nhiều results để filter
+            )
             
-            return {
-                "route": "VECTOR_BASED",
-                "similarity_score": best_similarity,
-                "matched_question": best_question_data['question'],
-                "answer": best_question_data['answer'],
-                "source": best_question_data['source'],
-                "matched_category": category,
-                "all_matches": [
-                    {
-                        "question": q_data['question'],
-                        "similarity": sim,
-                        "answer": q_data['answer'][:100] + "..." if len(q_data['answer']) > 100 else q_data['answer'],
+            if not results:
+                print(f"❌ No results found from Qdrant")
+                return {
+                    "route": "RAG_CHAT",
+                    "reason": f"No similar documents found in vector store",
+                    "similarity_score": 0.0,
+                    "searched_category": category
+                }
+            
+            # Filter results theo category với improved matching
+            category_results = []
+            found_categories = {}
+            
+            for doc, similarity in results:
+                doc_category = doc.metadata.get('category', '').strip().upper()
+                
+                # Track tất cả categories để debug
+                if doc_category in found_categories:
+                    found_categories[doc_category] += 1
+                else:
+                    found_categories[doc_category] = 1
+                
+                # Improved category matching
+                if doc_category == category or \
+                   doc_category.replace(' ', '') == category.replace(' ', '') or \
+                   (doc_category and category and doc_category in category) or \
+                   (doc_category and category and category in doc_category):
+                    category_results.append((doc, similarity))
+            
+            print(f"📊 Categories found in Qdrant results: {found_categories}")
+            
+            if not category_results:
+                print(f"❌ No results found in category '{category}' after filtering")
+                print(f"📊 Total results from Qdrant: {len(results)}")
+                print(f"🔍 Available categories: {list(found_categories.keys())}")
+                
+                # Try fuzzy matching with available categories
+                best_match_category = None
+                for available_cat in found_categories.keys():
+                    if available_cat and category:
+                        # Simple fuzzy matching
+                        if category.replace(' ', '').lower() in available_cat.replace(' ', '').lower() or \
+                           available_cat.replace(' ', '').lower() in category.replace(' ', '').lower():
+                            best_match_category = available_cat
+                            break
+                
+                if best_match_category:
+                    print(f"� Trying fuzzy match with category '{best_match_category}'")
+                    for doc, similarity in results:
+                        doc_category = doc.metadata.get('category', '').strip().upper()
+                        if doc_category == best_match_category:
+                            category_results.append((doc, similarity))
+                
+                if not category_results:
+                    return {
+                        "route": "RAG_CHAT",
+                        "reason": f"No documents found in category '{category}' (found {len(results)} total results in categories: {list(found_categories.keys())})",
+                        "similarity_score": 0.0,
+                        "searched_category": category,
+                        "available_categories": list(found_categories.keys())
+                    }
+            
+            # Sort filtered results by similarity
+            category_results.sort(key=lambda x: x[1], reverse=True)
+            
+            # Lấy kết quả tốt nhất trong category
+            best_doc, best_similarity = category_results[0]
+            
+            print(f"📊 Found {len(category_results)} results in category '{category}'")
+            print(f"📊 Best similarity in category '{category}': {best_similarity:.3f}")
+            print(f"🔍 Best match: {best_doc.page_content[:50]}...")
+            
+            # Quyết định dựa trên threshold
+            if best_similarity >= self.similarity_threshold:
+                print(f"✅ Found good match in category '{category}' (similarity: {best_similarity:.3f} >= {self.similarity_threshold})")
+                
+                # Extract metadata
+                metadata = best_doc.metadata
+                answer = metadata.get('answer', '')
+                source = metadata.get('source', '')
+                matched_question = best_doc.page_content
+                
+                return {
+                    "route": "VECTOR_BASED",
+                    "similarity_score": best_similarity,
+                    "matched_question": matched_question,
+                    "answer": answer,
+                    "source": source,
+                    "matched_category": category,
+                    "all_matches": [
+                        {
+                            "question": doc.page_content,
+                            "similarity": sim,
+                            "answer": doc.metadata.get('answer', '')[:100] + "..." if len(doc.metadata.get('answer', '')) > 100 else doc.metadata.get('answer', ''),
+                            "category": category
+                        }
+                        for doc, sim in category_results[:5]  # Top 5 in category
+                    ]
+                }
+            else:
+                print(f"❌ Similarity too low in category '{category}' (best: {best_similarity:.3f} < {self.similarity_threshold})")
+                
+                return {
+                    "route": "RAG_CHAT",
+                    "reason": f"Best similarity {best_similarity:.3f} in category '{category}' below threshold {self.similarity_threshold}",
+                    "similarity_score": best_similarity,
+                    "searched_category": category,
+                    "best_match": {
+                        "question": best_doc.page_content,
+                        "similarity": best_similarity,
+                        "answer": best_doc.metadata.get('answer', '')[:100] + "..." if len(best_doc.metadata.get('answer', '')) > 100 else best_doc.metadata.get('answer', ''),
                         "category": category
                     }
-                    for _, sim, q_data in similar_questions
-                ]
-            }
-        else:
-            print(f"❌ Similarity too low in category '{category}' (best: {best_similarity:.3f} < {self.similarity_threshold})")
-            
+                }
+                
+        except Exception as e:
+            logger.error(f"Error in Qdrant search for category {category}: {e}")
+            print(f"❌ Error in Qdrant search for category '{category}': {e}")
             return {
                 "route": "RAG_CHAT",
-                "reason": f"Best similarity {best_similarity:.3f} in category '{category}' below threshold {self.similarity_threshold}",
-                "similarity_score": best_similarity,
-                "searched_category": category,
-                "best_match": {
-                    "question": best_question_data['question'],
-                    "similarity": best_similarity,
-                    "answer": best_question_data['answer'][:100] + "..." if len(best_question_data['answer']) > 100 else best_question_data['answer'],
-                    "category": category
-                }
+                "reason": f"Error during Qdrant search in category {category}: {str(e)}",
+                "similarity_score": 0.0,
+                "searched_category": category
             }
-    
+
     async def route_query(self, query: str) -> Dict:
         """Main routing function với category-partitioned approach"""
         try:
@@ -534,44 +365,11 @@ CHỈ TRẢ VỀ TÊN DANH MỤC DUY NHẤT - KHÔNG GIẢI THÍCH GÌ THÊM."""
                 "query": query,
                 "similarity_score": 0.0
             }
-    
-    def get_stats(self) -> Dict:
-        """Thống kê về category-partitioned router"""
-        
-        total_questions = 0
-        category_stats = {}
-        
-        for category in self.valid_categories:
-            if category in self.category_questions_data:
-                count = len(self.category_questions_data[category])
-                category_stats[category] = count
-                total_questions += count
-            else:
-                category_stats[category] = 0
-        
-        stats = {
-            "total_questions": total_questions,
-            "category_breakdown": category_stats,
-            "similarity_threshold": self.similarity_threshold,
-            "valid_categories": self.valid_categories,
-            "partitions_initialized": list(self.category_embeddings.keys()),
-            "use_categorized_data": self.use_categorized_data
-        }
-        
-        return stats
-    
-    def set_similarity_threshold(self, threshold: float):
-        """Điều chỉnh threshold cho vector search"""
-        if 0.0 <= threshold <= 1.0:
-            self.similarity_threshold = threshold
-            print(f"📊 Vector similarity threshold updated to: {threshold}")
-        else:
-            print(f"❌ Invalid threshold: {threshold}. Must be between 0.0 and 1.0")
-    
+
     async def test_query(self, query: str, show_details: bool = True) -> Dict:
-        """Test một câu hỏi với category-partitioned approach"""
+        """Test một câu hỏi với category-partitioned approach sử dụng Qdrant"""
         
-        print(f"\n🧪 Testing category-partitioned routing for: '{query}'")
+        print(f"\n🧪 Testing category-partitioned routing (Qdrant) for: '{query}'")
         
         # Test classification
         print(f"\n📋 Step 1: LLM Classification")
@@ -581,28 +379,33 @@ CHỈ TRẢ VỀ TÊN DANH MỤC DUY NHẤT - KHÔNG GIẢI THÍCH GÌ THÊM."""
         print(f"   Should use vector: {classification_result['should_use_vector']}")
         
         if classification_result['should_use_vector'] and category != "KHÁC":
-            print(f"\n🔍 Step 2: Category-Partitioned Vector Search")
+            print(f"\n🔍 Step 2: Category-Filtered Qdrant Search")
             
-            # Initialize category embeddings
-            await self._initialize_category_embeddings(category)
-            
-            if category in self.category_questions_data:
-                category_count = len(self.category_questions_data[category])
-                print(f"   📊 Searching in {category_count} questions in category '{category}'")
+            try:
+                # Test query Qdrant sử dụng VectorStore wrapper
+                results = await self.vector_store.similarity_search_with_score(
+                    query=query,
+                    k=1
+                )
                 
-                # Get embedding và search
-                query_embedding = await self._get_query_embedding(query)
-                similar_questions = self._find_most_similar_in_category(query_embedding, category, top_k=5)
+                # Filter by category
+                category_results = []
+                for doc, sim in results:
+                    if doc.metadata.get('category', '').strip().upper() == category:
+                        category_results.append((doc, sim))
                 
-                if show_details and similar_questions:
-                    print(f"\n📊 Top 5 similar questions in category '{category}':")
-                    for i, (idx, similarity, q_data) in enumerate(similar_questions, 1):
+                print(f"   📊 Found {len(category_results)} results in category '{category}' from Qdrant (total: {len(results)})")
+                
+                if show_details and category_results:
+                    print(f"\n📊 Top {min(5, len(category_results))} similar questions in category '{category}':")
+                    for i, (doc, similarity) in enumerate(category_results[:5], 1):
                         print(f"  {i}. Similarity: {similarity:.3f}")
-                        print(f"     Question: {q_data['question']}")
-                        print(f"     Answer: {q_data['answer'][:100]}...")
+                        print(f"     Question: {doc.page_content}")
+                        answer = doc.metadata.get('answer', '')
+                        print(f"     Answer: {answer[:100]}...")
                         print()
-            else:
-                print(f"   ❌ No data available for category '{category}'")
+            except Exception as e:
+                print(f"   ❌ Error querying Qdrant: {e}")
         else:
             print(f"\n⚡ Step 2: Skipped vector search (Category: {category})")
         
@@ -620,156 +423,116 @@ CHỈ TRẢ VỀ TÊN DANH MỤC DUY NHẤT - KHÔNG GIẢI THÍCH GÌ THÊM."""
         
         return result
 
-    async def test_classification_consistency(self, query: str, num_tests: int = 5) -> Dict:
-        """Test tính nhất quán của classification cho cùng một câu hỏi"""
-        
-        print(f"\n🧪 Testing classification consistency for: '{query}'")
-        print(f"🔄 Running {num_tests} classification attempts...")
-        
-        results = []
-        categories = []
-        
-        for i in range(num_tests):
-            print(f"   Test {i+1}/{num_tests}...", end="")
-            
-            try:
-                result = await self._classify_query_category(query)
-                category = result["category"]
-                categories.append(category)
-                results.append(result)
-                print(f" → {category}")
-                
-                # Small delay to avoid rate limiting
-                await asyncio.sleep(0.5)
-                
-            except Exception as e:
-                print(f" → ERROR: {e}")
-                categories.append("ERROR")
-        
-        # Phân tích kết quả
-        from collections import Counter
-        category_counts = Counter(categories)
-        total_valid = len([c for c in categories if c != "ERROR"])
-        
-        if total_valid == 0:
-            return {
-                "query": query,
-                "consistency_rate": 0.0,
-                "dominant_category": "ERROR",
-                "all_results": categories,
-                "is_consistent": False
-            }
-        
-        # Tìm category xuất hiện nhiều nhất
-        dominant_category = category_counts.most_common(1)[0][0]
-        dominant_count = category_counts[dominant_category]
-        consistency_rate = dominant_count / total_valid
-        
-        print(f"\n📊 Consistency Analysis:")
-        print(f"   Dominant category: {dominant_category}")
-        print(f"   Consistency rate: {consistency_rate:.1%} ({dominant_count}/{total_valid})")
-        print(f"   All results: {dict(category_counts)}")
-        
-        is_consistent = consistency_rate >= 0.8  # 80% threshold
-        consistency_status = "✅ CONSISTENT" if is_consistent else "❌ INCONSISTENT"
-        print(f"   Status: {consistency_status}")
-        
-        return {
-            "query": query,
-            "consistency_rate": consistency_rate,
-            "dominant_category": dominant_category,
-            "category_distribution": dict(category_counts),
-            "all_results": categories,
-            "is_consistent": is_consistent,
-            "num_tests": num_tests
+    def get_stats(self):
+        """Trả về thống kê về router performance và cache"""
+        stats = {
+            "vector_store_type": "Qdrant (CategoryPartitioned)",
+            "total_questions": len(self.data) if hasattr(self, 'data') and self.data is not None else 0,
+            "similarity_threshold": self.similarity_threshold,
+            "valid_categories": self.valid_categories.copy(),
+            "classification_cache_size": len(self.classification_cache),
+            "vector_search_cache_size": len(self.vector_search_cache),
+            "categorized_data_loaded": self.use_categorized_data
         }
+        
+        # Thống kê category từ data nếu có
+        if hasattr(self, 'data') and self.data is not None and 'category' in self.data.columns:
+            category_stats = self.data['category'].value_counts().to_dict()
+            stats["category_breakdown"] = category_stats
+        else:
+            stats["category_breakdown"] = {}
+        
+        # Thống kê cache theo category
+        cache_by_category = {}
+        for cached_result in self.classification_cache.values():
+            category = cached_result.get('category', 'Unknown')
+            cache_by_category[category] = cache_by_category.get(category, 0) + 1
+        
+        stats["classification_cache_by_category"] = cache_by_category
+        
+        return stats
 
-    async def batch_test_consistency(self, test_queries: List[str], tests_per_query: int = 3) -> Dict:
-        """Test tính nhất quán cho nhiều câu hỏi"""
+    async def debug_vector_store_categories(self, sample_size=10):
+        """Debug method để kiểm tra category trong Qdrant"""
+        print(f"\n🔍 Debugging Qdrant vector store categories...")
         
-        print(f"\n🚀 Batch testing classification consistency")
-        print(f"📝 {len(test_queries)} queries, {tests_per_query} tests each")
-        
-        all_results = []
-        consistent_count = 0
-        
-        for i, query in enumerate(test_queries, 1):
-            print(f"\n📋 Query {i}/{len(test_queries)}: {query[:50]}...")
-            
-            result = await self.test_classification_consistency(query, tests_per_query)
-            all_results.append(result)
-            
-            if result["is_consistent"]:
-                consistent_count += 1
-        
-        # Tổng kết
-        overall_consistency = consistent_count / len(test_queries)
-        
-        print(f"\n🎯 OVERALL CONSISTENCY REPORT:")
-        print(f"   Total queries tested: {len(test_queries)}")
-        print(f"   Consistent queries: {consistent_count}")
-        print(f"   Overall consistency rate: {overall_consistency:.1%}")
-        
-        # Phân tích category performance
-        category_performance = {}
-        for result in all_results:
-            cat = result["dominant_category"]
-            if cat not in category_performance:
-                category_performance[cat] = []
-            category_performance[cat].append(result["consistency_rate"])
-        
-        print(f"\n📊 Category Performance:")
-        for cat, rates in category_performance.items():
-            avg_rate = sum(rates) / len(rates)
-            print(f"   {cat}: {avg_rate:.1%} avg consistency ({len(rates)} queries)")
-        
-        return {
-            "overall_consistency_rate": overall_consistency,
-            "consistent_queries": consistent_count,
-            "total_queries": len(test_queries),
-            "category_performance": {
-                cat: sum(rates) / len(rates) 
-                for cat, rates in category_performance.items()
-            },
-            "detailed_results": all_results
-        }
-    
-    def clear_classification_cache(self):
-        """Xóa cache classification"""
-        self.classification_cache.clear()
-        print("🗑️ Classification cache cleared")
-    
-    def get_cache_stats(self) -> Dict:
-        """Thống kê cache"""
-        return {
-            "cache_size": len(self.classification_cache),
-            "cached_queries": list(self.classification_cache.keys())[:5]  # Show first 5 hashes
-        }
-    
-    def save_classification_cache(self, filepath: str = "classification_cache.json"):
-        """Lưu cache vào file để persistent consistency"""
-        import json
         try:
-            # Convert để serializable
-            serializable_cache = {}
-            for query_hash, result in self.classification_cache.items():
-                serializable_cache[query_hash] = result
+            # Lấy sample documents từ Qdrant sử dụng VectorStore wrapper
+            results = await self.vector_store.similarity_search_with_score(
+                query="test query",
+                k=sample_size
+            )
+            
+            print(f"📊 Found {len(results)} documents in Qdrant:")
+            
+            categories_found = {}
+            for i, (doc, score) in enumerate(results):
+                metadata = doc.metadata
+                category = metadata.get('category', 'NO_CATEGORY')
+                source = metadata.get('source', 'NO_SOURCE') 
                 
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(serializable_cache, f, ensure_ascii=False, indent=2)
-            print(f"💾 Classification cache saved to {filepath} ({len(serializable_cache)} entries)")
+                print(f"  {i+1}. Category: '{category}' | Source: '{source}'")
+                print(f"     Content: {doc.page_content[:50]}...")
+                print(f"     Metadata keys: {list(metadata.keys())}")
+                
+                if category in categories_found:
+                    categories_found[category] += 1
+                else:
+                    categories_found[category] = 1
+            
+            print(f"\n📋 Category Summary in Qdrant:")
+            for category, count in categories_found.items():
+                print(f"   '{category}': {count} documents")
+                
+            return categories_found
+            
         except Exception as e:
-            print(f"❌ Error saving cache: {e}")
-    
-    def load_classification_cache(self, filepath: str = "classification_cache.json"):
-        """Load cache từ file để maintain consistency"""
-        import json
+            print(f"❌ Error debugging vector store: {e}")
+            return {}
+
+    async def analyze_text_format_issue(self):
+        """Phân tích vấn đề format text giữa cache và Qdrant"""
+        print(f"\n🔍 Analyzing Text Format Issues...")
+        
         try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                self.classification_cache = json.load(f)
-            print(f"📥 Classification cache loaded from {filepath} ({len(self.classification_cache)} entries)")
-            print("✅ This ensures 100% classification consistency for cached queries!")
-        except FileNotFoundError:
-            print(f"⚠️  Cache file {filepath} not found, starting with empty cache")
+            # Lấy sample documents từ Qdrant sử dụng VectorStore wrapper
+            sample_results = await self.vector_store.similarity_search_with_score(
+                query="test query",
+                k=5
+            )
+            
+            print(f"📊 Sample document formats in Qdrant:")
+            for i, (doc, score) in enumerate(sample_results):
+                print(f"\n  Document {i+1}:")
+                print(f"    Score: {score:.4f}")
+                print(f"    Category: '{doc.metadata.get('category', 'NO_CATEGORY')}'")
+                print(f"    Content length: {len(doc.page_content)} characters")
+                print(f"    Content format:")
+                
+                # Show first 200 chars with format analysis
+                content_preview = doc.page_content[:200]
+                print(f"    '{content_preview}...'")
+                
+                # Analyze format
+                if content_preview.startswith("Question:"):
+                    print(f"    ✅ Format: Question-Answer format")
+                    
+                    # Extract just the question part
+                    try:
+                        lines = doc.page_content.split('\n')
+                        question_line = lines[0].replace("Question: ", "").strip()
+                        answer_line = lines[1].replace("Answer: ", "").strip() if len(lines) > 1 else ""
+                        
+                        print(f"    📝 Extracted Question: '{question_line[:100]}...'")
+                        print(f"    💬 Extracted Answer: '{answer_line[:100]}...'")
+                        
+                    except Exception as e:
+                        print(f"    ❌ Error parsing Q&A format: {e}")
+                else:
+                    print(f"    ⚠️  Format: Unknown format")
+            
+            return True
+            
         except Exception as e:
-            print(f"❌ Error loading cache: {e}")
+            print(f"❌ Error analyzing text format: {e}")
+            return False
