@@ -8,7 +8,7 @@ load_dotenv()
 class Settings(BaseSettings):
     """Settings for the application"""
     # OpenAI API key
-    openai_api_key: str = os.getenv("OPENAI_API_KEY", "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")
+    openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
 
     # LangSmith settings
     langsmith_api_key: str = os.getenv("LANGSMITH_API_KEY", "")
