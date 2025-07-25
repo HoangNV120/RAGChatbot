@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     dimension: int = 3072
 
     # Pinecone settings
-    pinecone_api_key: str = os.getenv("PINECONE_API_KEY", "pcsk_UdUWs_Bx3yRmYfELogdHCF6LAmU6sjDrUz3Etw26QQivfwVNyh4CkhJRwS7RyTRYcYSeR")
+    pinecone_api_key: str = os.getenv("PINECONE_API_KEY", "")
     pinecone_environment: str = os.getenv("PINECONE_ENVIRONMENT", "")
     pinecone_index_name: str = os.getenv("PINECONE_INDEX_NAME", "ragchatbot3")
 
