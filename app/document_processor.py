@@ -2,6 +2,7 @@ from langchain_community.document_loaders import DirectoryLoader, TextLoader, JS
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from app.vector_store import VectorStore
 from app.smart_router import SmartQueryRouter
+from app.syllabus_converter import SyllabusConverter
 import os
 import asyncio
 import pandas as pd
@@ -34,6 +35,9 @@ class DocumentProcessor:
 
         # Initialize Smart Router for routing questions
         self.smart_router = SmartQueryRouter()
+        
+        # Initialize Syllabus Converter for course data
+        self.syllabus_converter = SyllabusConverter()
 
     def _determine_document_type(self, filename: str) -> str:
         """
@@ -44,7 +48,7 @@ class DocumentProcessor:
         # Bỏ extension .json
         name_without_ext = filename.replace('.json', '')
 
-        # Pattern cho Syllabus: 3 chữ in hoa (có thể có Đ) + 3 số + có thể c�� 1 chữ thường
+        # Pattern cho Syllabus: 3 chữ in hoa (có thể có Đ) + 3 số + có thể c 1 chữ thường
         syllabus_pattern = r'^[A-ZĐ]{3}\d{3}[a-z]?$'
 
         # Kiểm tra pattern cho Syllabus
@@ -58,10 +62,13 @@ class DocumentProcessor:
         # Mặc định là Curriculum
         return "Curriculum"
 
-    async def load_and_process_documents(self):
+    async def load_and_process_documents(self, delete_after_load=False):
         """
         Load JSON documents from the data directory, split them into chunks,
         and store them in the vector database with proper metadata
+
+        Args:
+            delete_after_load (bool): If True, delete files after successfully loading them
         """
         # Check if directory exists
         if not os.path.exists(self.data_dir):
@@ -75,8 +82,13 @@ class DocumentProcessor:
         documents = []
 
         try:
-            # Tìm tất cả file JSON trong thư mục
-            json_files = [f for f in os.listdir(self.data_dir) if f.endswith('.json')]
+            # Tìm tất cả file JSON trong thư mục, loại trừ file system
+            json_files = []
+            for f in os.listdir(self.data_dir):
+                if f.endswith('.json'):
+                    # Loại trừ các file system
+                    if f not in ['processing_log.json', 'sync_metadata.json']:
+                        json_files.append(f)
 
             if not json_files:
                 print("No JSON files found in the data directory")
@@ -93,12 +105,30 @@ class DocumentProcessor:
                     doc_type = self._determine_document_type(json_file)
 
                     print(f"Processing {json_file} - Name: {name}, Type: {doc_type}")
-
+                    
+                    # Check if this is a syllabus file that should use the specialized converter
+                    if doc_type == "Syllabus":
+                        # Use syllabus converter for course-specific JSON files
+                        plain_text = self.syllabus_converter.process_syllabus_file(file_path)
+                        if plain_text:
+                            doc = Document(
+                                page_content=plain_text,
+                                metadata={
+                                    "name": name,
+                                    "type": doc_type,
+                                    "source": file_path
+                                }
+                            )
+                            documents.append(doc)
+                            print(f"Successfully converted syllabus {json_file} using specialized converter")
+                            continue
+                    
+                    # For non-syllabus files or if syllabus conversion failed, use standard method
                     # Sử dụng JSONLoader để load file
                     loader = JSONLoader(
                         file_path=file_path,
                         jq_schema='.',  # Load toàn bộ JSON content
-                        text_content=False
+                        text_content=False  # Change to False to get structured data
                     )
 
                     # Load documents từ JSON file
@@ -106,13 +136,38 @@ class DocumentProcessor:
                         None, loader.load
                     )
 
-                    # Thêm metadata cho mỗi document
+                    # Convert JSON content to clean plain text
+                    cleaned_documents = []
                     for doc in file_documents:
-                        doc.metadata.update({
-                            "name": name,
-                            "type": doc_type
-                        })
-                        documents.append(doc)
+                        # Get the raw JSON data
+                        try:
+                            import json
+                            json_data = json.loads(doc.page_content)
+
+                            # Convert JSON to clean plain text
+                            plain_text = self._convert_json_to_plain_text(json_data)
+
+                            # Create new document with clean text
+                            cleaned_doc = Document(
+                                page_content=plain_text,
+                                metadata={
+                                    "name": name,
+                                    "type": doc_type,
+                                    "source": file_path
+                                }
+                            )
+                            cleaned_documents.append(cleaned_doc)
+
+                        except Exception as parse_error:
+                            print(f"Error parsing JSON content for {json_file}: {parse_error}")
+                            # Fallback to original content if parsing fails
+                            doc.metadata.update({
+                                "name": name,
+                                "type": doc_type
+                            })
+                            cleaned_documents.append(doc)
+
+                    documents.extend(cleaned_documents)
 
                     print(f"Successfully loaded {json_file} with {len(file_documents)} documents")
 
@@ -131,127 +186,182 @@ class DocumentProcessor:
                 None, lambda: self.text_splitter.split_documents(documents)
             )
 
-            # Thêm tên file vào đầu mỗi chunk để dễ tìm kiếm
-            enhanced_splits = []
-            for split in splits:
-                # Lấy tên file từ metadata
-                file_name = split.metadata.get("name", "unknown")
-
-                # Thêm tên file vào đầu content
-                enhanced_content = f"{file_name} : {split.page_content}"
-
-                # Tạo document mới với content đã được enhance
-                enhanced_split = Document(
-                    page_content=enhanced_content,
-                    metadata=split.metadata
-                )
-                enhanced_splits.append(enhanced_split)
 
             # Add documents to vector store
-            await self.vector_store.add_documents(enhanced_splits)
+            await self.vector_store.add_documents(splits)
 
-            print(f"Processed {len(documents)} documents, created {len(enhanced_splits)} chunks with file names prefixed")
-            return enhanced_splits
+            print(f"Processed {len(documents)} documents, created {len(splits)} chunks with file names prefixed")
+
+            # Delete files after successful processing if requested
+            if delete_after_load:
+                await self._delete_processed_files(json_files, "JSON")
+
+            return splits
 
         except Exception as e:
             print(f"Error processing JSON documents: {str(e)}")
             return []
 
-    async def load_and_process_excel(self, excel_path=None):
+    async def load_and_process_excel(self, delete_after_load=False):
         """
-        Load data from Excel file containing question and answer columns,
-        convert to documents, and add to vector store
+        Load data from all Excel files containing FQA,
+        convert to documents, and add to both vector stores
+
+        Args:
+            delete_after_load (bool): If True, delete files after successfully loading them
         """
         try:
-            # If path not provided, try multiple locations for data_test.xlsx
-            if excel_path is None:
-                current_dir = os.path.dirname(os.path.abspath(__file__))
-                possible_paths = [  # app/data_test.xlsx
-                    os.path.join(self.data_dir, 'data_test.xlsx')  # app/data/data_test.xlsx  # RAGChatbotai/data_test.xlsx
-                ]
-
-                # Try each path until we find the file
-                for path in possible_paths:
-                    if os.path.exists(path):
-                        excel_path = path
-                        break
-
-                if excel_path is None:
-                    print("Could not find data_test.xlsx in any of the expected locations:")
-                    for path in possible_paths:
-                        print(f"  - {path}")
-                    return []
-
-            print(f"Loading Excel file from: {excel_path}")
-
-            # Load Excel file asynchronously
-            df = await asyncio.get_event_loop().run_in_executor(None, lambda: pd.read_excel(excel_path))
-            print(f"Excel file loaded with {len(df)} rows")
-
-            if 'question' not in df.columns or 'answer' not in df.columns:
-                print("Excel file must contain 'question' and 'answer' columns")
+            # Check if directory exists
+            if not os.path.exists(self.data_dir):
+                print(f"Data directory does not exist: {self.data_dir}")
                 return []
 
-            # Convert Excel data to documents
-            documents = []
+            # Find all Excel files in the data directory
+            excel_files = []
+            for f in os.listdir(self.data_dir):
+                if f.endswith('.xlsx') or f.endswith('.xls'):
+                    excel_files.append(f)
 
-            # Process each row asynchronously
-            async def process_row(idx, row):
-                questions = str(row['question']).split('|')
-                answer = str(row['answer'])
-
-                row_docs = []
-                for q in questions:
-                    q = q.strip()
-                    if q:
-                        # Create a document with both question and answer
-                        content = f"Question: {q}\nAnswer: {answer}"
-                        row_docs.append(Document(
-                            page_content=content,
-                            metadata={
-                                "name": "FQA",
-                                "type": "FQA"
-                            }
-                        ))
-                return row_docs
-
-            # Create tasks for all rows
-            tasks = [process_row(idx, row) for idx, row in df.iterrows()]
-
-            # Execute all tasks and gather results
-            results = await asyncio.gather(*tasks)
-
-            # Flatten list of lists
-            for row_docs in results:
-                documents.extend(row_docs)
-
-            print(f"Created {len(documents)} documents from Excel data")
-
-            if not documents:
-                print("No valid data found in Excel file")
+            if not excel_files:
+                print("No Excel files found in the data directory")
                 return []
+
+            print(f"Found {len(excel_files)} Excel files")
+
+            all_documents = []
+            processed_files = []
+
+            for excel_file in excel_files:
+                excel_path = os.path.join(self.data_dir, excel_file)
+
+                try:
+                    print(f"Loading Excel file: {excel_file}")
+
+                    # Load Excel file asynchronously
+                    df = await asyncio.get_event_loop().run_in_executor(None, lambda: pd.read_excel(excel_path))
+                    print(f"Excel file loaded with {len(df)} rows")
+
+                    # Check if this file contains FQA data (must have 'question' and 'answer' columns)
+                    if 'question' not in df.columns or 'answer' not in df.columns:
+                        print(f"Skipping {excel_file} - does not contain 'question' and 'answer' columns")
+                        continue
+
+                    print(f"Processing FQA data from {excel_file}")
+
+                    # Convert Excel data to documents
+                    documents = []
+
+                    # Process each row asynchronously
+                    async def process_row(idx, row):
+                        questions = str(row['question']).split('|')
+                        answer = str(row['answer'])
+
+                        row_docs = []
+                        for q in questions:
+                            q = q.strip()
+                            if q:
+                                # Create a document with both question and answer
+                                content = f"Question: {q}\nAnswer: {answer}"
+                                row_docs.append(Document(
+                                    page_content=content,
+                                    metadata={
+                                        "name": "FQA",
+                                        "type": "FQA",
+                                        "source": excel_file
+                                    }
+                                ))
+                        return row_docs
+
+                    # Create tasks for all rows
+                    tasks = [process_row(idx, row) for idx, row in df.iterrows()]
+
+                    # Execute all tasks and gather results
+                    results = await asyncio.gather(*tasks)
+
+                    # Flatten list of lists
+                    for row_docs in results:
+                        documents.extend(row_docs)
+
+                    print(f"Created {len(documents)} documents from {excel_file}")
+
+                    if documents:
+                        all_documents.extend(documents)
+                        processed_files.append(excel_file)
+
+                except Exception as file_error:
+                    print(f"Error processing {excel_file}: {str(file_error)}")
+                    continue
+
+            if not all_documents:
+                print("No valid FQA data found in any Excel files")
+                return []
+
+            print(f"Total created {len(all_documents)} documents from {len(processed_files)} Excel files")
 
             # Split documents into chunks (run in executor to avoid blocking)
             splits = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: self.text_splitter.split_documents(documents)
+                None, lambda: self.text_splitter.split_documents(all_documents)
             )
 
-            # Add documents to vector store - sửa lỗi ở đây
+            # Add documents to both vector stores
+            # 1. Add to main vector store (RAG format with full content)
             await self.vector_store.add_documents(splits)
+            print(f"Added {len(splits)} chunks to main vector store")
 
-            print(f"Processed Excel file, created {len(splits)} chunks")
+            # 2. Add to routing vector store (only questions for embedding)
+            routing_documents = []
+            for doc in all_documents:
+                # Extract question from the RAG format content
+                content = doc.page_content
+                if content.startswith("Question: "):
+                    # Extract just the question part
+                    question_part = content.split("\nAnswer: ")[0].replace("Question: ", "")
+                    # Extract answer part
+                    answer_part = content.split("\nAnswer: ")[1] if "\nAnswer: " in content else ""
+
+                    # Create routing document with only question as content
+                    routing_doc = Document(
+                        page_content=question_part,  # Only question for embedding
+                        metadata={
+                            "answer": answer_part,  # Answer stored in metadata
+                            "category": "FQA",
+                            "source": doc.metadata.get("source", "excel")
+                        }
+                    )
+                    routing_documents.append(routing_doc)
+
+            if routing_documents:
+                await self.smart_router.routing_vector_store.add_questions(routing_documents)
+                print(f"Added {len(routing_documents)} questions to routing vector store")
+            else:
+                print("No routing documents created from FQA data")
+
+            print(f"Processed {len(processed_files)} Excel files with FQA data, created {len(splits)} chunks")
+
+            # Delete Excel files after successful processing if requested
+            if delete_after_load and processed_files:
+                await self._delete_processed_files(processed_files, "Excel")
+
+                # Also delete corresponding routing questions
+                for excel_file in processed_files:
+                    await self.smart_router.routing_vector_store.delete_questions_by_source(excel_file)
+                    print(f"Deleted routing questions from source: {excel_file}")
+
             return splits
 
         except Exception as e:
-            print(f"Error processing Excel file: {str(e)}")
+            print(f"Error processing Excel files: {str(e)}")
             import traceback
             traceback.print_exc()
             return []
 
-    async def load_and_process_pdf(self):
+    async def load_and_process_pdf(self, delete_after_load=False):
         """
         Load PDF files from the data directory, convert to documents with metadata
         name as filename and type as "Decision", and add to vector store
+
+        Args:
+            delete_after_load (bool): If True, delete files after successfully loading them
         """
         try:
             # Check if directory exists
@@ -384,6 +494,11 @@ class DocumentProcessor:
             await self.vector_store.add_documents(enhanced_splits)
 
             print(f"Processed {len(documents)} PDF documents, created {len(enhanced_splits)} chunks with file names prefixed")
+
+            # Delete PDF files after successful processing if requested
+            if delete_after_load:
+                await self._delete_processed_files(pdf_files, "PDF")
+
             return enhanced_splits
 
         except Exception as e:
@@ -391,6 +506,54 @@ class DocumentProcessor:
             import traceback
             traceback.print_exc()
             return []
+
+    async def _delete_processed_files(self, file_list, file_type):
+        """
+        Delete a list of files after successful processing
+
+        Args:
+            file_list (list): List of filenames to delete
+            file_type (str): Type of files being deleted (for logging)
+        """
+        deleted_count = 0
+        failed_count = 0
+
+        for filename in file_list:
+            try:
+                file_path = os.path.join(self.data_dir, filename)
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    print(f"✅ Deleted {file_type} file: {filename}")
+                    deleted_count += 1
+                else:
+                    print(f"⚠️ File not found for deletion: {filename}")
+                    failed_count += 1
+            except Exception as e:
+                print(f"❌ Failed to delete {filename}: {str(e)}")
+                failed_count += 1
+
+        print(f"📊 File deletion summary for {file_type}: {deleted_count} deleted, {failed_count} failed")
+
+    async def _delete_single_file(self, file_path, file_type):
+        """
+        Delete a single file after successful processing
+
+        Args:
+            file_path (str): Full path to the file to delete
+            file_type (str): Type of file being deleted (for logging)
+        """
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                filename = os.path.basename(file_path)
+                print(f"✅ Deleted {file_type} file: {filename}")
+                return True
+            else:
+                print(f"⚠️ File not found for deletion: {file_path}")
+                return False
+        except Exception as e:
+            print(f"❌ Failed to delete {file_path}: {str(e)}")
+            return False
 
     async def load_routing_questions_from_excel(self, excel_path=None):
         """
@@ -448,6 +611,7 @@ class DocumentProcessor:
 
                         routing_questions.append({
                             "question": q,
+                            "answer": answer,  # Thêm answer vào data
                             "category": category
                         })
 
@@ -482,22 +646,25 @@ class DocumentProcessor:
             traceback.print_exc()
             return False
 
-    async def load_and_process_all_with_routing(self):
+    async def load_and_process_all_with_routing(self, delete_after_load=False):
         """
         Load and process all documents including routing questions
+
+        Args:
+            delete_after_load (bool): If True, delete files after successfully loading them
         """
         print("=== Loading Routing Questions ===")
         routing_success = await self.load_routing_questions_from_excel()
 
         print("\n=== Loading Regular Documents ===")
         # Load text documents
-        text_docs = await self.load_and_process_documents()
+        text_docs = await self.load_and_process_documents(delete_after_load=delete_after_load)
 
         # Load Excel data for RAG
-        excel_docs = await self.load_and_process_excel()
+        excel_docs = await self.load_and_process_excel(delete_after_load=delete_after_load)
 
         # Load PDF data
-        pdf_docs = await self.load_and_process_pdf()
+        pdf_docs = await self.load_and_process_pdf(delete_after_load=delete_after_load)
 
         total_docs = text_docs + excel_docs + pdf_docs
 
@@ -505,19 +672,133 @@ class DocumentProcessor:
         print(f"Routing questions loaded: {'✅' if routing_success else '❌'}")
         print(f"Total RAG documents processed: {len(total_docs)}")
 
+        if delete_after_load:
+            print("🗑️ File deletion mode was enabled - processed files have been removed")
+
         return total_docs
 
-# Add this if you want to test the document processor directly
-if __name__ == "__main__":
-    processor = DocumentProcessor()
-    # To process only text files:
-    # asyncio.run(processor.load_and_process_documents())
+    async def safe_load_and_delete(self, file_types=None, confirm_deletion=True):
+        """
+        Safely load documents and optionally delete them with confirmation
 
-    # To process only Excel:
-    # asyncio.run(processor.load_and_process_excel())
+        Args:
+            file_types (list): List of file types to process ['json', 'excel', 'pdf']
+            confirm_deletion (bool): Ask for confirmation before deleting files
+        """
+        if file_types is None:
+            file_types = ['json', 'excel', 'pdf']
 
-    # To process only PDF:
-    # asyncio.run(processor.load_and_process_pdf())
+        print("🔄 Starting safe document loading...")
 
-    # To process all:
-    asyncio.run(processor.load_and_process_all_with_routing())
+        total_docs = []
+
+        try:
+            # Load routing questions first (no deletion needed)
+            print("\n=== Loading Routing Questions ===")
+            routing_success = await self.load_routing_questions_from_excel()
+
+            # Process each file type
+            if 'json' in file_types:
+                print("\n=== Processing JSON Documents ===")
+                json_docs = await self.load_and_process_documents(delete_after_load=True)
+                total_docs.extend(json_docs)
+
+            if 'excel' in file_types:
+                print("\n=== Processing Excel Documents ===")
+                excel_docs = await self.load_and_process_excel(delete_after_load=True)
+                total_docs.extend(excel_docs)
+
+            if 'pdf' in file_types:
+                print("\n=== Processing PDF Documents ===")
+                pdf_docs = await self.load_and_process_pdf(delete_after_load=True)
+                total_docs.extend(pdf_docs)
+
+            print(f"\n✅ Successfully processed {len(total_docs)} documents")
+            print("🗑️ Source files have been deleted after successful processing")
+
+            return total_docs
+
+        except Exception as e:
+            print(f"❌ Error during safe load and delete: {str(e)}")
+            return []
+
+    def _convert_json_to_plain_text(self, json_data):
+        """
+        Convert JSON data to clean plain text format
+
+        Args:
+            json_data: Parsed JSON data (dict, list, or other)
+
+        Returns:
+            str: Clean plain text representation
+        """
+        def clean_text(text):
+            """Clean text by removing extra whitespace and formatting"""
+            if not isinstance(text, str):
+                text = str(text)
+
+            # Remove newline characters within values and normalize whitespace
+            text = re.sub(r'\s+', ' ', text.strip())
+
+            # Remove common escape characters
+            text = text.replace('\\n', ' ')
+            text = text.replace('\\t', ' ')
+            text = text.replace('\\r', ' ')
+
+            return text.strip()
+
+        def process_value(value, key=None):
+            """Process a single value from JSON"""
+            if value is None or value == "":
+                return ""
+
+            if isinstance(value, (dict, list)):
+                return json_to_text(value)
+            else:
+                cleaned = clean_text(value)
+                if key and cleaned:
+                    return f"{key}: {cleaned}"
+                return cleaned
+
+        def json_to_text(data):
+            """Convert JSON structure to plain text"""
+            if isinstance(data, dict):
+                text_parts = []
+                for key, value in data.items():
+                    if value is not None and value != "":
+                        processed = process_value(value, key)
+                        if processed:
+                            text_parts.append(processed)
+                return ". ".join(text_parts)
+
+            elif isinstance(data, list):
+                text_parts = []
+                for item in data:
+                    if isinstance(item, dict):
+                        # For list of objects, process each object
+                        item_text = json_to_text(item)
+                        if item_text:
+                            text_parts.append(item_text)
+                    else:
+                        # For list of simple values
+                        processed = process_value(item)
+                        if processed:
+                            text_parts.append(processed)
+                return ". ".join(text_parts)
+
+            else:
+                return clean_text(data)
+
+        try:
+            result = json_to_text(json_data)
+            # Final cleanup - remove multiple spaces and normalize punctuation
+            result = re.sub(r'\s+', ' ', result)
+            result = re.sub(r'\s*\.\s*', '. ', result)
+            result = re.sub(r'\s*:\s*', ': ', result)
+
+            return result.strip()
+
+        except Exception as e:
+            print(f"Error converting JSON to plain text: {e}")
+            return str(json_data)  # Fallback to string representation
+

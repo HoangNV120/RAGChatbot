@@ -120,7 +120,6 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-.env
 .venv
 env/
 venv/
@@ -169,7 +168,6 @@ cython_debug/
 *.ipr
 
 # Visual Studio Code
-.vscode/
 *.code-workspace
 
 # OS generated files
@@ -211,9 +209,6 @@ tmp/
 *.temp
 
 # API keys and sensitive data
-.env.local
-.env.production
-.env.staging
 secrets.json
 config.json
 
@@ -238,3 +233,5 @@ gradio_cached_examples/
 
 # FastAPI/Uvicorn
 .pytest_cache/
+config.bat
+node_modules

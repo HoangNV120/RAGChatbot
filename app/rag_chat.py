@@ -1,7 +1,8 @@
-from typing import Dict, Optional, List, TypedDict
+from typing import Dict, Optional, List, TypedDict, AsyncGenerator
 from uuid import uuid4
 import logging
 import asyncio
+import time
 from functools import lru_cache
 
 from langchain_core.messages import HumanMessage, BaseMessage
@@ -34,16 +35,35 @@ class RAGChat:
         self.query_rewriter = PreRetrieval()
         self.post_retrieval = PostRetrieval()  # Khởi tạo PostRetrieval để áp dụng reranking
 
-        self.system_prompt = """Bạn là *Trợ lý Sinh viên FPTU*.
-Mục tiêu: trả lời chính xác, đầy đủ, không chứa thông tin không liên quan, văn phong thân thiện-chuyên nghiệp.
+        self.system_prompt = """Bạn là *Trợ lý Sinh viên FPTU* được huấn luyện để chỉ trả lời dựa trên thông tin có sẵn.
+**NGUYÊN TẮC TUYỆT ĐỐI:**
+- CHỈ sử dụng thông tin có trong Context được cung cấp
+- KHÔNG được thêm kiến thức từ bên ngoài context
+- KHÔNG được trả lời user query tổng quát (toán học, khoa học, lập trình)
 
-Quy tắc:
-1. Dùng đại từ "bạn / mình".
-2. Nếu chưa chắc thông tin, chỉ nói "Mình chưa có dữ liệu, bạn vui lòng liên hệ Phòng CTSV nhé."
-3. Không thêm lời chào, cảm ơn hoặc đề nghị không nằm trong context.
-4. Không thêm câu hỏi, đề xuất hay hướng dẫn nếu không có trong context.
+**QUY TẮC TRÍCH DẪN:**
+- Nếu context có đủ thông tin → Trả lời chính xác dựa trên context
+- Nếu context có thông tin một phần → Trả lời phần có + "Để biết thêm chi tiết, bạn liên hệ Phòng CTSV"
+- Nếu context không có thông tin → "Mình chưa có dữ liệu, bạn vui lòng liên hệ Phòng CTSV nhé."
 
-Chỉ trả lời nếu context hỗ trợ đầy đủ và rõ ràng."""
+**XỬ LÝ CÂU HỎI ĐẶC BIỆT:**
+- Câu hỏi Yes/No: Kiểm tra thông tin trong context, trả lời "Đúng" hoặc "Không đúng" + giải thích dựa trên context
+- Câu hỏi so sánh/xác minh: So sánh thông tin trong câu hỏi với thông tin trong context, nếu sai thì đưa ra thông tin đúng từ context
+
+**ĐƯỢC PHÉP SỬ DỤNG:**
+- So sánh thông tin có trong context
+- Tổng hợp thông tin từ nhiều phần của context
+- Phân tích mối quan hệ giữa các thông tin trong context
+- Rút ra kết luận logic dựa trên thông tin có sẵn trong context
+**CÁCH TRẢ LỜI:**
+- Dùng "bạn/mình", thân thiện
+- Trích dẫn trực tiếp từ context
+- Có thể tổng hợp và so sánh thông tin trong context
+- Không đặt câu hỏi ngược lại
+**TUYỆT ĐỐI KHÔNG:**
+- Sử dụng kiến thức tổng quát không có trong context
+- Thêm thông tin từ bên ngoài context
+- Giải thích khái niệm không có trong context"""
 
         # Sử dụng singleton LLM để tránh tạo mới nhiều lần
         if RAGChat._llm_instance is None:
@@ -53,6 +73,7 @@ Chỉ trả lời nếu context hỗ trợ đầy đủ và rõ ràng."""
                 api_key=settings.openai_api_key,
                 max_retries=2,  # Giảm retries để phản hồi nhanh hơn
                 timeout=30,  # Timeout 30s thay vì mặc định 60s
+                streaming=True,
             )
         self.llm = RAGChat._llm_instance
 
@@ -60,14 +81,26 @@ Chỉ trả lời nếu context hỗ trợ đầy đủ và rõ ràng."""
         self.prompt_template = PromptTemplate.from_template(
             """{system_prompt}
 
-Thông tin truy xuất:
----------------------
+---
+
+Context được cung cấp: 
 {context}
----------------------
 
-Câu hỏi: {question}
+---
 
-Hãy trả lời câu hỏi dựa trên thông tin trong context. Nếu context có thông tin liên quan, hãy sử dụng nó để trả lời. Chỉ trả lời "Mình chưa có dữ liệu, bạn vui lòng liên hệ Phòng CTSV nhé." khi context hoàn toàn không có thông tin liên quan đến câu hỏi."""
+User query cần trả lời: {question}
+
+---
+
+**HƯỚNG DẪN XỬ LÝ:**
+1. Đọc kỹ Context trên
+2. Kiểm tra xem Context có chứa thông tin để trả lời user query không
+3. Nếu CÓ → Trả lời dựa hoàn toàn trên thông tin trong Context
+4. Nếu KHÔNG → Trả lời "Mình chưa có dữ liệu, bạn vui lòng liên hệ Phòng CTSV nhé."
+
+**LƯU Ý:** Tuyệt đối không được thêm thông tin từ bên ngoài Context.
+
+Trả lời:"""
         )
 
         # Khởi tạo LangGraph với memory để lưu lịch sử theo thread_id
@@ -120,11 +153,16 @@ Hãy trả lời câu hỏi dựa trên thông tin trong context. Nếu context 
             # Lấy subqueries từ state nếu có, nếu không thì chỉ dùng câu hỏi gốc
             subqueries = state.get('subqueries', [question])
 
+            print(len(subqueries))
+
+            # Tối ưu: giảm k cho mỗi query để tổng số docs không quá lớn
+            k_per_query = max(1, min(3, 6 // (len(subqueries) - 1)))
+
             # Tìm kiếm song song với tất cả các câu hỏi phụ
             search_tasks = []
             for query in subqueries:
                 task = asyncio.create_task(
-                    self.vector_store.similarity_search(query, k=2)
+                    self.vector_store.similarity_search(query, k=k_per_query)
                 )
                 search_tasks.append(task)
 
@@ -149,23 +187,23 @@ Hãy trả lời câu hỏi dựa trên thông tin trong context. Nếu context 
                                 combined_docs.append(doc)
 
                 # Áp dụng LLM-based reranking nếu có nhiều documents
-                if len(combined_docs) > 4:
-                    try:
-                        # Sử dụng method llm_rerank public thay vì _llm_rerank private
-                        reranked_docs = await asyncio.wait_for(
-                            self.post_retrieval.llm_rerank(question, combined_docs, top_k=4),
-                            timeout=15.0
-                        )
-                        logger.info(f"LLM-based reranked {len(combined_docs)} docs to top {len(reranked_docs)}")
-                        final_docs = reranked_docs
-                    except asyncio.TimeoutError:
-                        logger.warning("LLM-based reranking timeout, using original docs")
-                        final_docs = combined_docs[:4]
-                    except Exception as e:
-                        logger.warning(f"LLM-based reranking failed: {e}, using original docs")
-                        final_docs = combined_docs[:4]
-                else:
-                    final_docs = combined_docs
+                # if len(combined_docs) > 4:
+                #     try:
+                #         # Sử dụng method llm_rerank public thay vì _llm_rerank private
+                #         reranked_docs = await asyncio.wait_for(
+                #             self.post_retrieval.llm_rerank(question, combined_docs, top_k=4),
+                #             timeout=15.0
+                #         )
+                #         logger.info(f"LLM-based reranked {len(combined_docs)} docs to top {len(reranked_docs)}")
+                #         final_docs = reranked_docs
+                #     except asyncio.TimeoutError:
+                #         logger.warning("LLM-based reranking timeout, using original docs")
+                #         final_docs = combined_docs[:4]
+                #     except Exception as e:
+                #         logger.warning(f"LLM-based reranking failed: {e}, using original docs")
+                #         final_docs = combined_docs[:4]
+                # else:
+                final_docs = combined_docs
 
                 return {**state, "docs": final_docs}
 
@@ -306,3 +344,106 @@ Hãy trả lời câu hỏi dựa trên thông tin trong context. Nếu context 
             "messages": [msg.content for msg in result["messages"]],
             "subqueries": rewrite_result.get("subqueries", [processed_query])  # Thêm thông tin debug về các câu hỏi phụ
         }
+
+    async def generate_response_stream(self, query: str, session_id: Optional[str] = None) -> AsyncGenerator[Dict, None]:
+        """
+        Streaming version sử dụng LangGraph astream
+        """
+        await self._ensure_graph_ready()
+
+        if not session_id or session_id.strip() == "":
+            session_id = str(uuid4())
+
+        try:
+            # Bước 1: Phân tích và viết lại query
+            try:
+                rewrite_result = await asyncio.wait_for(
+                    self.query_rewriter.analyze_and_rewrite(query),
+                    timeout=5.0
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Query rewriter timeout, using original query")
+                rewrite_result = {"can_process": True, "rewritten_query": query}
+
+            processed_query = rewrite_result["rewritten_query"]
+
+            # Bước 2: Lấy lịch sử chat từ memory
+            config = {"configurable": {"thread_id": session_id}}
+
+            try:
+                current_state = await asyncio.wait_for(
+                    self.graph_app.aget_state(config),
+                    timeout=3.0
+                )
+                existing_messages = current_state.values.get("messages", []) if current_state.values else []
+            except (asyncio.TimeoutError, Exception):
+                existing_messages = []
+
+            # Thêm message mới và giới hạn history
+            all_messages = existing_messages + [HumanMessage(content=processed_query)]
+            recent_messages = all_messages[-3:] if len(all_messages) > 3 else all_messages
+
+            # Bước 3: Chuẩn bị state với subqueries
+            initial_state = {
+                "messages": recent_messages,
+                "subqueries": rewrite_result.get("subqueries", [processed_query])
+            }
+
+            # Bước 4: Sử dụng LangGraph astream
+            full_response = ""
+            async for chunk in self.graph_app.astream(initial_state, config=config, stream_mode="updates"):
+                # Xử lý chunk từ retrieve node
+                if "retrieve" in chunk:
+                    # Có thể yield thông tin về việc đang tìm kiếm
+                    continue
+
+                # Xử lý chunk từ generate node
+                if "generate" in chunk:
+                    state = chunk["generate"]
+                    if "messages" in state and state["messages"]:
+                        last_message = state["messages"][-1]
+                        if hasattr(last_message, 'content'):
+                            # Nếu là streaming response từ LLM
+                            if hasattr(last_message, 'response_metadata') and last_message.response_metadata.get('streaming', False):
+                                full_response += last_message.content
+                                yield {
+                                    "type": "chunk",
+                                    "content": last_message.content,
+                                    "timestamp": time.time()
+                                }
+                            else:
+                                # Nếu là complete response, stream theo từng chunk
+                                response_content = last_message.content
+                                if response_content != full_response:
+                                    new_content = response_content[len(full_response):]
+                                    full_response = response_content
+
+                                    # Stream từng từ để có hiệu ứng typing
+                                    words = new_content.split()
+                                    for word in words:
+                                        yield {
+                                            "type": "chunk",
+                                            "content": word + " ",
+                                            "timestamp": time.time()
+                                        }
+                                        await asyncio.sleep(0.01)  # Small delay
+
+            # Yield done event
+            yield {
+                "type": "done",
+                "session_id": session_id,
+                "route_used": "RAG_CHAT",
+                "routing_info": {},
+                "timestamp": time.time(),
+                "subqueries": rewrite_result.get("subqueries", [processed_query]),
+                "final_answer": full_response
+            }
+
+        except Exception as e:
+            logger.error(f"Error in RAG streaming: {e}")
+            yield {
+                "type": "error",
+                "content": "🤖 Xin lỗi, có lỗi xảy ra. Bạn vui lòng thử lại sau.",
+                "timestamp": time.time()
+            }
+

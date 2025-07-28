@@ -228,7 +228,7 @@ async def main():
     print("=" * 50)
 
     # Đường dẫn files - sửa lại đường dẫn
-    input_file = "app/data/data_evaluation.xlsx"
+    input_file = "app/data_evaluation.xlsx"
     output_file = f"evaluation/simple_evaluation_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
 
     # Kiểm tra file input tồn tại
@@ -239,9 +239,9 @@ async def main():
         alternative_paths = [
             "data_evaluation.xlsx",
             "evaluation/data_evaluation.xlsx",
-            "app/data/data_evaluation.xlsx",
-            "../app/data/data_evaluation.xlsx",
-            "./app/data/data_evaluation.xlsx"
+            "app/data_evaluation.xlsx",
+            "../app/data_evaluation.xlsx",
+            "./app/data_evaluation.xlsx"
         ]
 
         print("🔍 Đang tìm file trong các đường dẫn khác...")
