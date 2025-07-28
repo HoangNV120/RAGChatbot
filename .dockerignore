@@ -1,0 +1,85 @@
+# .dockerignore
+# Ignore development files
+.env
+.env.local
+.env.development
+*.log
+.DS_Store
+Thumbs.db
+
+# Ignore version control
+.git
+.gitignore
+
+# Ignore IDE files
+.vscode
+.idea
+.venv
+*.swp
+*.swo
+
+# Ignore Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.pytest_cache
+
+# Ignore node modules (if any)
+node_modules
+
+# Ignore build files
+build
+dist
+*.egg-info
+
+# Ignore temporary files
+tmp
+temp
+*.tmp
+
+# Ignore documentation
+docs
+*.md
+README.md
+
+# Ignore test files
+tests
+test_*
+
+# Ignore evaluation files (optional)
+evaluation
+
+# Ignore database files (will be created automatically)
+chat_sessions.db
+chat_sessions.db-shm
+chat_sessions.db-wal
+*.db
+*.db-shm
+*.db-wal
+
+# Ignore log files
+*.log
+logs/
+chatbot.log
+
+# Ignore data files that will be synced from Google Drive
+app/data/*.txt
+app/data/*.json
+app/data/*.pdf
+app/data/*.docx
+app/data/*.xlsx
+
+# Ignore backup files
+backups/
+*.bak
+*.backup
+
+# Keep essential files
+!requirements.txt
+!service-account.json
+!app/
+!main.py
+!app/data/__init__.py

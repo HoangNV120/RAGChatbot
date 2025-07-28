@@ -105,3 +105,176 @@ class VectorStore:
         return await asyncio.get_event_loop().run_in_executor(
             None, lambda: self.vector_store.add_documents(documents)
         )
+
+    async def delete_documents_by_name(self, name):
+        """
+        Delete documents from the vector store based on metadata "name"
+
+        Args:
+            name (str): The name to match in metadata
+
+        Returns:
+            bool: True if deletion was successful, False otherwise
+        """
+        try:
+            # Get all documents with the specified name
+            filter_condition = models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="metadata.name",
+                        match=models.MatchValue(value=name)
+                    )
+                ]
+            )
+
+            # Search for documents to get their IDs
+            search_result = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: self.client.scroll(
+                    collection_name=settings.collection_name,
+                    scroll_filter=filter_condition,
+                    limit=10000,  # Adjust based on your needs
+                    with_payload=True,
+                    with_vectors=False
+                )
+            )
+
+            if not search_result[0]:  # No documents found
+                print(f"No documents found with name: {name}")
+                return False
+
+            # Extract IDs from search results
+            ids_to_delete = [point.id for point in search_result[0]]
+
+            # Delete the documents
+            await asyncio.get_event_loop().run_in_executor(
+                None, lambda: self.client.delete(
+                    collection_name=settings.collection_name,
+                    points_selector=models.PointIdsList(points=ids_to_delete)
+                )
+            )
+
+            print(f"Successfully deleted {len(ids_to_delete)} documents with name: {name}")
+            return True
+
+        except Exception as e:
+            print(f"Error deleting documents with name {name}: {str(e)}")
+            return False
+
+    async def update_documents_by_name(self, name, new_documents):
+        """
+        Update documents in the vector store based on metadata "name"
+        This will delete existing documents with the name and add new ones
+
+        Args:
+            name (str): The name to match in metadata for deletion
+            new_documents (List): List of new documents to add
+
+        Returns:
+            bool: True if update was successful, False otherwise
+        """
+        try:
+            # First delete existing documents with the name
+            delete_success = await self.delete_documents_by_name(name)
+
+            if not delete_success:
+                print(f"Failed to delete existing documents with name: {name}")
+                # Continue with adding new documents even if deletion failed
+
+            # Add new documents
+            new_ids = await self.add_documents(new_documents)
+
+            if new_ids:
+                print(f"Successfully updated documents with name: {name}")
+                print(f"Added {len(new_documents)} new documents")
+                return True
+            else:
+                print(f"Failed to add new documents for name: {name}")
+                return False
+
+        except Exception as e:
+            print(f"Error updating documents with name {name}: {str(e)}")
+            return False
+
+    async def get_documents_by_name(self, name):
+        """
+        Get all documents from the vector store based on metadata "name"
+
+        Args:
+            name (str): The name to match in metadata
+
+        Returns:
+            List of documents with the specified name
+        """
+        try:
+            filter_condition = models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="metadata.name",
+                        match=models.MatchValue(value=name)
+                    )
+                ]
+            )
+
+            # Search for documents
+            search_result = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: self.client.scroll(
+                    collection_name=settings.collection_name,
+                    scroll_filter=filter_condition,
+                    limit=10000,
+                    with_payload=True,
+                    with_vectors=False
+                )
+            )
+
+            documents = []
+            if search_result[0]:
+                for point in search_result[0]:
+                    # Extract document content and metadata
+                    content = point.payload.get('page_content', '')
+                    metadata = point.payload.get('metadata', {})
+
+                    # Create Document object
+                    from langchain.schema import Document
+                    doc = Document(page_content=content, metadata=metadata)
+                    documents.append(doc)
+
+            print(f"Found {len(documents)} documents with name: {name}")
+            return documents
+
+        except Exception as e:
+            print(f"Error getting documents with name {name}: {str(e)}")
+            return []
+
+    async def list_all_document_names(self):
+        """
+        Get a list of all unique document names in the vector store
+
+        Returns:
+            List of unique document names
+        """
+        try:
+            # Get all documents
+            search_result = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: self.client.scroll(
+                    collection_name=settings.collection_name,
+                    limit=10000,
+                    with_payload=True,
+                    with_vectors=False
+                )
+            )
+
+            names = set()
+            if search_result[0]:
+                for point in search_result[0]:
+                    metadata = point.payload.get('metadata', {})
+                    name = metadata.get('name')
+                    if name:
+                        names.add(name)
+
+            names_list = list(names)
+            print(f"Found {len(names_list)} unique document names")
+            return names_list
+
+        except Exception as e:
+            print(f"Error listing document names: {str(e)}")
+            return []

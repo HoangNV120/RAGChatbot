@@ -1,9 +1,10 @@
 from typing import Dict, Optional
 import logging
+import time
+import asyncio
 
 from app.smart_router import SmartQueryRouter
 from app.rag_chat import RAGChat
-from app.rule_based_chatbot import AdvancedChatbot
 from app.safety_guard import SafetyGuard
 from app.config import settings
 
@@ -23,9 +24,6 @@ class MasterChatbot:
 
         # Khởi tạo RAG Chat
         self.rag_chat = RAGChat(vector_store=vector_store)
-
-        # Khởi tạo Rule-based chatbot - sử dụng class mới
-        self.rule_based_chatbot = AdvancedChatbot()
 
     async def generate_response(self, query: str, session_id: Optional[str] = None) -> Dict:
         """
@@ -54,14 +52,13 @@ class MasterChatbot:
             if 'similarity_score' in routing_result:
                 print(f"Similarity score: {routing_result['similarity_score']:.3f}")
 
-            if route == "RULE_BASED":
-                # Sử dụng rule-based chatbot với câu hỏi được router chọn
-                query_to_use = routing_result["query"]  # Câu hỏi tìm được từ DB
-                answer = await self.rule_based_chatbot.get_response(query_to_use)
+            if route == "DIRECT_ANSWER":
+                # Trả về answer trực tiếp từ metadata khi score >= 80%
+                direct_answer = routing_result.get("answer", "")
                 return {
-                    "output": answer,
-                    "session_id": session_id or "rule-based-session",
-                    "route_used": "RULE_BASED",
+                    "output": direct_answer,
+                    "session_id": session_id or "direct-answer-session",
+                    "route_used": "DIRECT_ANSWER",
                     "routing_info": routing_result
                 }
             else:
@@ -78,4 +75,57 @@ class MasterChatbot:
                 "output": "🤖 Xin lỗi, có lỗi xảy ra. Bạn vui lòng thử lại sau.",
                 "session_id": session_id or "error-session",
                 "route_used": "ERROR"
+            }
+
+    async def generate_response_stream(self, query: str, session_id: Optional[str] = None):
+        """
+        Phương thức streaming để xử lý query và trả về từng chunk - chỉ stream chunk, done, error
+        """
+        try:
+            # Routing (không stream)
+            routing_result = await self.router.route_query(query)
+            route = routing_result["route"]
+
+            if route == "DIRECT_ANSWER":
+                # Trả về answer trực tiếp từ metadata
+                direct_answer = routing_result.get("answer", "")
+
+                # Stream answer theo chunks
+                words = direct_answer.split()
+                chunk_size = 5  # 5 words per chunk
+
+                for i in range(0, len(words), chunk_size):
+                    chunk = " ".join(words[i:i + chunk_size])
+                    yield {
+                        "type": "chunk",
+                        "content": chunk + (" " if i + chunk_size < len(words) else ""),
+                        "route_used": "DIRECT_ANSWER",
+                        "timestamp": time.time()
+                    }
+                    await asyncio.sleep(0.05)  # Small delay for streaming effect
+
+                yield {
+                    "type": "done",
+                    "session_id": session_id or "direct-answer-session",
+                    "route_used": "DIRECT_ANSWER",
+                    "routing_info": routing_result,
+                    "timestamp": time.time()
+                }
+
+            else:
+                # RAG processing
+                query_to_use = routing_result["query"]
+
+                # Stream RAG response
+                async for chunk in self.rag_chat.generate_response_stream(query_to_use, session_id):
+                    chunk["route_used"] = "RAG_CHAT"
+                    chunk["routing_info"] = routing_result
+                    yield chunk
+
+        except Exception as e:
+            logger.error(f"Error in master chatbot stream: {e}")
+            yield {
+                "type": "error",
+                "content": "🤖 Xin lỗi, có lỗi xảy ra. Bạn vui lòng thử lại sau.",
+                "timestamp": time.time()
             }

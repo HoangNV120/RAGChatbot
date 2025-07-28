@@ -15,14 +15,14 @@ class PreRetrieval:
             max_tokens=300  # Tăng max_tokens để có thể sinh nhiều câu hỏi phụ hơn
         )
 
-        # Prompt được tối ưu hóa cho tạo subqueries
-        self.subquery_prompt = """Hãy phân tích câu hỏi sau và tạo ra 3-4 câu hỏi phụ để tìm kiếm thông tin hiệu quả hơn.
+        # Prompt được tối ưu hóa cho tạo subqueries (hỗ trợ cả tiếng Việt và tiếng Anh)
+        self.subquery_prompt = """Hãy phân tích câu hỏi sau và tạo ra từ 1 đến 3 câu hỏi phụ để tìm kiếm thông tin hiệu quả hơn.
 
 Câu hỏi chính: "{query}"
 
 Yêu cầu:
 1. Giữ nguyên ý nghĩa chính của câu hỏi gốc
-2. Tạo thêm các câu hỏi phụ với từ khóa khác nhau 
+2. Tạo thêm các câu hỏi phụ với từ khóa khác nhau bằng tiếng Việt
 3. Mở rộng ngữ cảnh liên quan
 4. Mỗi câu hỏi phụ trên 1 dòng, không đánh số
 
@@ -31,8 +31,6 @@ Câu hỏi chính: "Làm thế nào để đăng ký học phần?"
 Các câu hỏi phụ:
 Làm thế nào để đăng ký học phần?
 Quy trình đăng ký môn học như thế nào?
-Thời gian đăng ký các môn học khi nào?
-Điều kiện để được đăng ký học phần?
 
 Hãy tạo các câu hỏi phụ cho câu hỏi trên:"""
 
@@ -54,7 +52,10 @@ Hãy tạo các câu hỏi phụ cho câu hỏi trên:"""
             for line in lines:
                 line = line.strip()
                 # Loại bỏ các dòng trống và dòng không phải câu hỏi
-                if line and len(line) > 10 and not line.startswith('Câu hỏi'):
+                if (line and len(line) > 10 and
+                    not line.startswith('Câu hỏi') and
+                    not line.startswith('Các câu hỏi') and
+                    line != "Các câu hỏi phụ:"):
                     # Loại bỏ số thứ tự nếu có
                     if line[0].isdigit() and line[1:3] in ['. ', ') ']:
                         line = line[3:]
@@ -86,3 +87,4 @@ Hãy tạo các câu hỏi phụ cho câu hỏi trên:"""
                 "rewritten_query": query,
                 "subqueries": [query]
             }
+
