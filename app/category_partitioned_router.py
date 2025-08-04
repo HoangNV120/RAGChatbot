@@ -139,7 +139,7 @@ class CategoryPartitionedRouter:
    • Từ khóa: "phòng", "thư viện", "ký túc xá", "cơ sở", "trang thiết bị"
 
 7. CHƯƠNG TRÌNH HỌC - Về môn học và lịch học:
-   • Môn học, tín chỉ, thời khóa biểu
+   • Môn học, tín chỉ, thời khóa biểu, learning outcomes
    • Lịch học, lịch thi, khung chương trình
    • Từ khóa: "môn học", "tín chỉ", "lịch học", "thời khóa biểu"
 

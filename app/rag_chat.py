@@ -43,8 +43,8 @@ class RAGChat:
 
 *QUY TẮC TRÍCH DẪN:*
 - Nếu context có đủ thông tin → Trả lời chính xác dựa trên context
-- Nếu context có thông tin một phần → Trả lời phần có + "Để biết thêm chi tiết, bạn liên hệ Phòng CTSV"
-- Nếu context không có thông tin → "Mình chưa có dữ liệu, bạn vui lòng liên hệ Phòng CTSV nhé."
+- Nếu context có thông tin một phần → Trả lời phần có + "Để biết thêm chi tiết, bạn liên hệ Phòng Dịch Vụ Sinh Viên"
+- Nếu context không có thông tin → "Mình chưa có dữ liệu, bạn vui lòng liên hệ Phòng Dịch Vụ Sinh Viên nhé."
 
 *XỬ LÝ CÂU HỎI ĐẶC BIỆT:*
 - Câu hỏi Yes/No: Kiểm tra thông tin trong context, trả lời "Đúng" hoặc "Không đúng" + giải thích dựa trên context
@@ -97,7 +97,7 @@ User query cần trả lời: {question}
 1. Đọc kỹ Context trên
 2. Kiểm tra xem Context có chứa thông tin để trả lời user query không
 3. Nếu CÓ → Trả lời dựa hoàn toàn trên thông tin trong Context
-4. Nếu KHÔNG → Trả lời "Mình chưa có dữ liệu, bạn vui lòng liên hệ Phòng CTSV nhé."
+4. Nếu KHÔNG → Trả lời "Mình chưa có dữ liệu, bạn vui lòng liên hệ Phòng Dịch Vụ Sinh Viên nhé."
 
 *LƯU Ý:* Tuyệt đối không được thêm thông tin từ bên ngoài Context.
 
