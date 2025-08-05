@@ -7,6 +7,7 @@ import os
 import asyncio
 import pandas as pd
 import re
+import json
 from langchain.schema import Document
 import pdfplumber
 import fitz  # PyMuPDF
@@ -108,21 +109,32 @@ class DocumentProcessor:
                     
                     # Check if this is a syllabus file that should use the specialized converter
                     if doc_type == "Syllabus":
-                        # Use syllabus converter for course-specific JSON files
-                        plain_text = self.syllabus_converter.process_syllabus_file(file_path)
-                        if plain_text:
-                            doc = Document(
-                                page_content=plain_text,
-                                metadata={
-                                    "name": name,
-                                    "type": doc_type,
-                                    "source": file_path
-                                }
-                            )
-                            documents.append(doc)
-                            print(f"Successfully converted syllabus {json_file} using specialized converter")
-                            continue
-                    
+                        # Use syllabus converter for intelligent chunking
+                        try:
+                            with open(file_path, 'r', encoding='utf-8') as f:
+                                json_data = json.load(f)
+
+                            # Convert to intelligent chunks
+                            syllabus_chunks = self.syllabus_converter.convert_syllabus_to_intelligent_chunks(json_data)
+
+                            if syllabus_chunks:
+                                # Add source file path to metadata of each chunk
+                                for chunk in syllabus_chunks:
+                                    chunk.metadata.update({
+                                        "name": name,
+                                        "type": doc_type,
+                                        "source": file_path
+                                    })
+
+                                documents.extend(syllabus_chunks)
+                                print(f"Successfully converted syllabus {json_file} to {len(syllabus_chunks)} intelligent chunks")
+                                continue
+                            else:
+                                print(f"No chunks created for syllabus {json_file}, falling back to standard method")
+                        except Exception as syllabus_error:
+                            print(f"Error in intelligent chunking for {json_file}: {syllabus_error}")
+                            print("Falling back to standard method")
+
                     # For non-syllabus files or if syllabus conversion failed, use standard method
                     # Sử dụng JSONLoader để load file
                     loader = JSONLoader(
@@ -182,21 +194,32 @@ class DocumentProcessor:
             print(f"Total loaded {len(documents)} documents from {len(json_files)} JSON files")
 
             # Split documents into chunks
-            splits = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: self.text_splitter.split_documents(documents)
-            )
+            # Don't split syllabus documents as they are already intelligently chunked
+            syllabus_docs = [doc for doc in documents if doc.metadata.get('type') == 'Syllabus']
+            non_syllabus_docs = [doc for doc in documents if doc.metadata.get('type') != 'Syllabus']
 
+            # Only split non-syllabus documents
+            if non_syllabus_docs:
+                splits = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: self.text_splitter.split_documents(non_syllabus_docs)
+                )
+                print(f"Split {len(non_syllabus_docs)} non-syllabus documents into {len(splits)} chunks")
+            else:
+                splits = []
+
+            # Combine syllabus documents (already chunked) with split non-syllabus documents
+            all_processed_docs = syllabus_docs + splits
 
             # Add documents to vector store
-            await self.vector_store.add_documents(splits)
+            await self.vector_store.add_documents(all_processed_docs)
 
-            print(f"Processed {len(documents)} documents, created {len(splits)} chunks with file names prefixed")
+            print(f"Processed {len(documents)} documents, created {len(all_processed_docs)} chunks with file names prefixed")
 
             # Delete files after successful processing if requested
             if delete_after_load:
                 await self._delete_processed_files(json_files, "JSON")
 
-            return splits
+            return all_processed_docs
 
         except Exception as e:
             print(f"Error processing JSON documents: {str(e)}")
@@ -802,3 +825,80 @@ class DocumentProcessor:
             print(f"Error converting JSON to plain text: {e}")
             return str(json_data)  # Fallback to string representation
 
+async def main():
+    """
+    Main function to manually process files in the data directory
+    Excludes log files and system files
+    """
+    print("=== Document Processor - Manual File Processing ===")
+
+    # Initialize document processor
+    processor = DocumentProcessor()
+
+    try:
+        # Check if data directory exists and list files
+        if not os.path.exists(processor.data_dir):
+            print(f"Data directory does not exist: {processor.data_dir}")
+            return
+
+        files = os.listdir(processor.data_dir)
+        print(f"Files found in {processor.data_dir}:")
+
+        # Filter out log files and system files
+        excluded_files = ['processing_log.json', 'sync_metadata.json', '__init__.py']
+        valid_files = []
+
+        for file in files:
+            if file not in excluded_files and not file.startswith('.'):
+                valid_files.append(file)
+                file_type = "Unknown"
+                if file.endswith('.json'):
+                    file_type = "JSON"
+                elif file.endswith(('.xlsx', '.xls')):
+                    file_type = "Excel"
+                elif file.endswith('.pdf'):
+                    file_type = "PDF"
+                print(f"  - {file} ({file_type})")
+
+        if not valid_files:
+            print("No valid files found to process")
+            return
+
+        print(f"\nFound {len(valid_files)} valid files to process")
+
+        # Ask user for confirmation
+        response = input("\nDo you want to process all files and delete them after successful loading? (y/n): ")
+
+        if response.lower() in ['y', 'yes']:
+            delete_after_load = True
+            print("Files will be deleted after successful processing")
+        else:
+            delete_after_load = False
+            print("Files will be kept after processing")
+
+        # Process all files
+        print("\n" + "="*50)
+        print("Starting file processing...")
+
+        # Load and process all documents with routing
+        total_docs = await processor.load_and_process_all_with_routing(delete_after_load=delete_after_load)
+
+        print("\n" + "="*50)
+        print("Processing completed!")
+        print(f"Total documents processed: {len(total_docs)}")
+
+        if delete_after_load:
+            print("✅ Source files have been deleted after successful processing")
+        else:
+            print("📁 Source files have been preserved")
+
+    except KeyboardInterrupt:
+        print("\n❌ Processing cancelled by user")
+    except Exception as e:
+        print(f"\n❌ Error during processing: {str(e)}")
+        import traceback
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    # Run the main function
+    asyncio.run(main())

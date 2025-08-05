@@ -53,25 +53,25 @@ async def lifespan(app: FastAPI):
     master_chatbot = MasterChatbot(vector_store=doc_processor.vector_store)
 
     # Initialize Smart Scheduler with Google Drive integration
-    if GOOGLE_DRIVE_FOLDER_ID != "YOUR_FOLDER_ID_HERE":
-        print("🔄 Initializing Smart Scheduler with Google Drive integration...")
-        smart_scheduler = SmartDocumentScheduler(
-            google_drive_folder_id=GOOGLE_DRIVE_FOLDER_ID,
-            data_dir=data_dir,
-            service_account_file=GOOGLE_SERVICE_ACCOUNT_FILE,
-            schedule_interval_hours=SCHEDULER_INTERVAL_HOURS
-        )
-
-        # Start the scheduler
-        smart_scheduler.start_scheduler()
-        print(f"✅ Smart Scheduler started - will sync every {SCHEDULER_INTERVAL_HOURS} hour(s)")
-    else:
-        print("⚠️ Google Drive integration disabled - please set GOOGLE_DRIVE_FOLDER_ID")
-
-        # Load documents manually if no Google Drive integration
-        print("Loading documents manually...")
-        await doc_processor.load_and_process_all_with_routing()
-        print("✅ Documents loaded and indexed in the vector database")
+    # if GOOGLE_DRIVE_FOLDER_ID != "YOUR_FOLDER_ID_HERE":
+    #     print("🔄 Initializing Smart Scheduler with Google Drive integration...")
+    #     smart_scheduler = SmartDocumentScheduler(
+    #         google_drive_folder_id=GOOGLE_DRIVE_FOLDER_ID,
+    #         data_dir=data_dir,
+    #         service_account_file=GOOGLE_SERVICE_ACCOUNT_FILE,
+    #         schedule_interval_hours=SCHEDULER_INTERVAL_HOURS
+    #     )
+    #
+    #     # Start the scheduler
+    #     smart_scheduler.start_scheduler()
+    #     print(f"✅ Smart Scheduler started - will sync every {SCHEDULER_INTERVAL_HOURS} hour(s)")
+    # else:
+    #     print("⚠️ Google Drive integration disabled - please set GOOGLE_DRIVE_FOLDER_ID")
+    #
+    #     # Load documents manually if no Google Drive integration
+    #     print("Loading documents manually...")
+    #     await doc_processor.load_and_process_all_with_routing()
+    #     print("✅ Documents loaded and indexed in the vector database")
 
     print("✅ RAG Chatbot is ready!")
 

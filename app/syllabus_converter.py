@@ -2,6 +2,7 @@ import json
 import os
 import re
 import uuid
+from langchain.schema import Document
 
 class SyllabusConverter:
     def __init__(self):
@@ -300,36 +301,39 @@ class SyllabusConverter:
         for category in categories:
             cat_name = category.get("Category", "")
             if cat_name:
-                # Start the basic sentence
-                sentence = f"The course {subject_code} assesses students through {cat_name}"
+                # Start the basic sentence with "grade" term
+                sentence = f"The course {subject_code} assesses students through {cat_name} grade"
 
-                # Add weight
+                # Add weight without multiplying by parts
                 weight = category.get("Weight", "")
+                part = category.get("Part", "1")
+
                 if weight:
                     sentence += f" which contributes {weight} to the final grade"
+
+                    # Add part information if there are multiple parts
+                    try:
+                        parts_count = int(part) if part and part != "1" else 1
+                        if parts_count > 1:
+                            sentence += f" (consisting of {parts_count} parts)"
+                    except (ValueError, TypeError):
+                        if part != "1":
+                            sentence += f" (consisting of {part} parts)"
 
                 # Add type
                 type_ = category.get("Type ", "")
                 if type_:
                     sentence += f" as a {type_} assessment"
 
-                # Add part - improved to clarify multiple parts
-                part = category.get("Part", "")
-                if part and part != "1":
-                    # For multiple parts, make it clear
-                    sentence += f" consisting of {part} separate parts"
-                    
-                    # Each part has the full weight as specified (not divided)
-                    if weight:
-                        sentence += f", each worth {weight}"
-                        
-                elif part == "1":
-                    sentence += f" as a single assessment component"
-
                 # Add completion criteria
                 completion = category.get("Completion Criteria", "")
                 if completion:
-                    sentence += f" requiring a minimum score of {completion}"
+                    # Replace > with "Over" for better readability
+                    if ">" in completion:
+                        completion_text = completion.replace(">", "Over ")
+                        sentence += f" requiring passing requirements of {completion_text}"
+                    else:
+                        sentence += f" requiring passing requirements of {completion}"
 
                 # Add CLOs
                 clo = category.get("CLO", "")
@@ -509,6 +513,433 @@ class SyllabusConverter:
             print(f"Error processing syllabus file {file_path}: {e}")
             return ""
 
+    def convert_syllabus_to_intelligent_chunks(self, json_data):
+        """
+        Convert course syllabus JSON data to intelligent chunks optimized for LLM.
+        Each chunk focuses on a specific aspect and includes the course code.
+
+        Args:
+            json_data: Parsed JSON data of a course syllabus
+
+        Returns:
+            list: List of Document objects with intelligent chunking
+        """
+        try:
+            subject_code = json_data.get("Subject Code", "")
+            if not subject_code:
+                return self._create_fallback_chunks(json_data)
+
+            chunks = []
+
+            # Chunk 1: Basic Course Information
+            basic_info_chunk = self._create_basic_info_chunk(json_data, subject_code)
+            if basic_info_chunk:
+                chunks.append(basic_info_chunk)
+
+            # Chunk 2: Learning Outcomes (CLOs)
+            clo_chunk = self._create_clo_chunk(json_data, subject_code)
+            if clo_chunk:
+                chunks.append(clo_chunk)
+
+            # Chunk 3: Course Materials
+            materials_chunk = self._create_materials_chunk(json_data, subject_code)
+            if materials_chunk:
+                chunks.append(materials_chunk)
+
+            # Chunk 4: Assessment Structure
+            assessment_chunk = self._create_assessment_chunk(json_data, subject_code)
+            if assessment_chunk:
+                chunks.append(assessment_chunk)
+
+            # Chunks 5+: Session Groups (every 5 sessions)
+            session_chunks = self._create_session_chunks(json_data, subject_code, sessions_per_chunk=5)
+            chunks.extend(session_chunks)
+
+            return chunks
+
+        except Exception as e:
+            print(f"Error creating intelligent chunks: {e}")
+            return self._create_fallback_chunks(json_data)
+
+    def _create_basic_info_chunk(self, json_data, subject_code):
+        """Create a chunk with basic course information"""
+        try:
+            content_parts = [f"Course Code: {subject_code}"]
+
+            # Course name
+            syllabus_name = json_data.get("Syllabus Name", "")
+            if syllabus_name:
+                content_parts.append(f"Course Name: {syllabus_name}")
+
+            # Credits
+            credits = json_data.get("NoCredit", "")
+            if credits:
+                content_parts.append(f"Credits: {credits}")
+
+            # Degree level
+            degree_level = json_data.get("Degree Level", "")
+            if degree_level:
+                content_parts.append(f"Degree Level: {degree_level}")
+
+            # Time allocation
+            time_allocation = json_data.get("Time Allocation", "")
+            if time_allocation:
+                content_parts.append(f"Time Allocation: {time_allocation}")
+
+            # Prerequisites
+            prerequisite = json_data.get("Pre-Requisite", "")
+            if prerequisite:
+                content_parts.append(f"Prerequisites: {prerequisite}")
+
+            # Course description
+            description = json_data.get("Description", "")
+            if description:
+                content_parts.append(f"Course Description: {description}")
+
+            # Student tasks
+            student_tasks = json_data.get("StudentTasks", "")
+            if student_tasks:
+                content_parts.append(f"Student Requirements: {student_tasks}")
+
+            # Tools required
+            tools = json_data.get("Tools", "")
+            if tools:
+                content_parts.append(f"Required Tools: {tools}")
+
+            # Minimum Average Mark To Pass
+            min_avg_mark = json_data.get("MinAvgMarkToPass", "")
+            if min_avg_mark:
+                content_parts.append(f"Minimum Average Mark To Pass: {min_avg_mark}")
+
+            # Scoring Scale
+            scoring_scale = json_data.get("Scoring Scale", "")
+            if scoring_scale:
+                content_parts.append(f"Scoring Scale: {scoring_scale}")
+
+            content = "\n\n".join(content_parts)
+
+            return Document(
+                page_content=content,
+                metadata={
+                    "course_code": subject_code,
+                    "chunk_type": "basic_info",
+                    "title": f"{subject_code} - Basic Course Information"
+                }
+            )
+
+        except Exception as e:
+            print(f"Error creating basic info chunk: {e}")
+            return None
+
+    def _create_clo_chunk(self, json_data, subject_code):
+        """Create a chunk with Course Learning Outcomes (CLOs)"""
+        try:
+            clos = json_data.get("CLOs", [])
+            if not clos:
+                return None
+
+            content_parts = [f"Course Code: {subject_code}", "Course Learning Outcomes (CLOs):"]
+
+            for clo in clos:
+                clo_name = clo.get("CLO Name", "")
+                lo_details = clo.get("LO Details", "")
+
+                if clo_name and lo_details:
+                    content_parts.append(f"CLO{clo_name}: {lo_details}")
+
+            content = "\n\n".join(content_parts)
+
+            return Document(
+                page_content=content,
+                metadata={
+                    "course_code": subject_code,
+                    "chunk_type": "learning_outcomes",
+                    "title": f"{subject_code} - Learning Outcomes",
+                    "clo_count": len(clos)
+                }
+            )
+
+        except Exception as e:
+            print(f"Error creating CLO chunk: {e}")
+            return None
+
+    def _create_materials_chunk(self, json_data, subject_code):
+        """Create a chunk with course materials"""
+        try:
+            materials = json_data.get("Materials", [])
+            if not materials:
+                return None
+
+            content_parts = [f"Course Code: {subject_code}", "Course Materials:"]
+
+            main_materials = []
+            supplementary_materials = []
+
+            for material in materials:
+                description = material.get("MaterialDescription", "")
+                author = material.get("Author", "")
+                publisher = material.get("Publisher", "")
+                published_date = material.get("PublishedDate", "")
+                edition = material.get("Edition", "")
+                isbn = material.get("ISBN", "")
+                is_main = material.get("IsMainMaterial", False)
+                is_online = material.get("IsOnline", False)
+                note = material.get("Note", "")
+
+                if description:
+                    material_info = [f"Title: {description}"]
+
+                    if author:
+                        material_info.append(f"Author: {author}")
+                    if publisher:
+                        material_info.append(f"Publisher: {publisher}")
+                    if published_date:
+                        material_info.append(f"Year: {published_date}")
+                    if edition:
+                        material_info.append(f"Edition: {edition}")
+                    if isbn:
+                        material_info.append(f"ISBN: {isbn}")
+
+                    format_type = "Online" if is_online else "Physical"
+                    material_info.append(f"Format: {format_type}")
+
+                    if note:
+                        material_info.append(f"Note: {note}")
+
+                    material_text = " | ".join(material_info)
+
+                    if is_main:
+                        main_materials.append(material_text)
+                    else:
+                        supplementary_materials.append(material_text)
+
+            if main_materials:
+                content_parts.append("Main Materials:")
+                content_parts.extend([f"- {mat}" for mat in main_materials])
+
+            if supplementary_materials:
+                content_parts.append("Supplementary Materials:")
+                content_parts.extend([f"- {mat}" for mat in supplementary_materials])
+
+            content = "\n\n".join(content_parts)
+
+            return Document(
+                page_content=content,
+                metadata={
+                    "course_code": subject_code,
+                    "chunk_type": "materials",
+                    "title": f"{subject_code} - Course Materials",
+                    "main_materials_count": len(main_materials),
+                    "supplementary_materials_count": len(supplementary_materials)
+                }
+            )
+
+        except Exception as e:
+            print(f"Error creating materials chunk: {e}")
+            return None
+
+    def _create_assessment_chunk(self, json_data, subject_code):
+        """Create a chunk with assessment structure with improved grade terminology"""
+        try:
+            categories = json_data.get("Categories", [])
+            if not categories:
+                return None
+
+            content_parts = [f"Course Code: {subject_code}", "Assessment Grade Structure:"]
+
+            total_weight = 0
+            assessment_details = []
+            has_passing_requirements = False
+
+            for category in categories:
+                cat_name = category.get("Category", "")
+                weight = category.get("Weight", "")
+                part = category.get("Part", "1")
+                type_ = category.get("Type ", "")
+                completion_criteria = category.get("Completion Criteria", "")
+                clo = category.get("CLO", "")
+                question_type = category.get("Question Type", "")
+                no_question = category.get("No Question", "")
+                note = category.get("Note", "")
+
+                if cat_name and weight:
+                    detail_parts = [f"Grade Assessment: {cat_name}"]
+
+                    # Display weight as is, without multiplying by parts
+                    detail_parts.append(f"Weight: {weight}")
+
+                    # Add parts information if multiple parts exist
+                    try:
+                        parts_count = int(part) if part and part != "1" else 1
+                        if parts_count > 1:
+                            detail_parts.append(f"Parts: {parts_count}")
+
+                        # Add to total weight (just the original weight value)
+                        weight_value = float(weight.replace("%", ""))
+                        total_weight += weight_value
+                    except (ValueError, TypeError):
+                        if part != "1":
+                            detail_parts.append(f"Parts: {part}")
+
+                    if type_:
+                        detail_parts.append(f"Type: {type_}")
+
+                    if completion_criteria:
+                        has_passing_requirements = True
+                        # Replace > with "Over" for better readability
+                        if ">" in completion_criteria:
+                            criteria_text = completion_criteria.replace(">", "Over ")
+                            detail_parts.append(f"Minimum Score to Pass: {criteria_text}")
+                        else:
+                            detail_parts.append(f"Minimum Score to Pass: {completion_criteria}")
+
+                    if clo:
+                        detail_parts.append(f"Evaluates CLOs: {clo}")
+
+                    if question_type:
+                        detail_parts.append(f"Format: {question_type}")
+
+                    if no_question:
+                        detail_parts.append(f"Number of Questions: {no_question}")
+
+                    if note:
+                        clean_note = note.replace("\n", " ").strip()
+                        detail_parts.append(f"Notes: {clean_note}")
+
+                    assessment_details.append(" | ".join(detail_parts))
+
+            # Add assessment details
+            for detail in assessment_details:
+                content_parts.append(f"- {detail}")
+
+            if total_weight > 0:
+                content_parts.append(f"\nTotal Grade Weight: {total_weight}%")
+
+            # Add passing requirement clarification
+            if has_passing_requirements:
+                content_parts.append(f"\nIMPORTANT PASSING REQUIREMENT for {subject_code}: Students must pass ALL assessment components (meet minimum score requirements for each component) to be eligible to pass the course. Simply achieving the overall course average is not sufficient - each individual assessment must meet its minimum passing criteria.")
+
+            content = "\n\n".join(content_parts)
+
+            return Document(
+                page_content=content,
+                metadata={
+                    "course_code": subject_code,
+                    "chunk_type": "assessment",
+                    "title": f"{subject_code} - Grade Assessment Structure",
+                    "assessment_count": len(assessment_details),
+                    "total_weight": total_weight
+                }
+            )
+
+        except Exception as e:
+            print(f"Error creating assessment chunk: {e}")
+            return None
+
+    def _create_session_chunks(self, json_data, subject_code, sessions_per_chunk=10):
+        """Create chunks for course sessions, grouped for better context"""
+        try:
+            sessions = json_data.get("StudentMaterials", [])
+            if not sessions:
+                return []
+
+            chunks = []
+
+            # Group sessions into chunks
+            for i in range(0, len(sessions), sessions_per_chunk):
+                session_group = sessions[i:i + sessions_per_chunk]
+
+                content_parts = [f"Course Code: {subject_code}"]
+
+                start_session = i + 1
+                end_session = min(i + sessions_per_chunk, len(sessions))
+                content_parts.append(f"Sessions {start_session}-{end_session}:")
+
+                for session in session_group:
+                    session_num = session.get("Session", "")
+                    topic = session.get("Topic", "")
+                    learning_type = session.get("Learning-Teaching Type", "")
+                    lo = session.get("LO", "")
+                    student_tasks = session.get("Student's Tasks", "")
+                    materials = session.get("Student Materials", "")
+
+                    if session_num and topic:
+                        session_parts = [f"Session {session_num}: {topic}"]
+
+                        if learning_type:
+                            session_parts.append(f"Type: {learning_type}")
+
+                        if lo:
+                            session_parts.append(f"Learning Outcomes: {lo}")
+
+                        if student_tasks:
+                            session_parts.append(f"Tasks: {student_tasks}")
+
+                        if materials:
+                            session_parts.append(f"Materials: {materials}")
+
+                        content_parts.append(" | ".join(session_parts))
+
+                content = "\n\n".join(content_parts)
+
+                chunk = Document(
+                    page_content=content,
+                    metadata={
+                        "course_code": subject_code,
+                        "chunk_type": "sessions",
+                        "title": f"{subject_code} - Sessions {start_session}-{end_session}",
+                        "session_start": start_session,
+                        "session_end": end_session,
+                        "session_count": len(session_group)
+                    }
+                )
+                chunks.append(chunk)
+
+            return chunks
+
+        except Exception as e:
+            print(f"Error creating session chunks: {e}")
+            return []
+
+    def _create_fallback_chunks(self, json_data):
+        """Create simple fallback chunks if intelligent chunking fails"""
+        try:
+            subject_code = json_data.get("Subject Code", "UNKNOWN")
+            content = json.dumps(json_data, indent=2, ensure_ascii=False)
+
+            return [Document(
+                page_content=f"Course Code: {subject_code}\n\n{content}",
+                metadata={
+                    "course_code": subject_code,
+                    "chunk_type": "fallback",
+                    "title": f"{subject_code} - Complete Syllabus Data"
+                }
+            )]
+
+        except Exception as e:
+            print(f"Error creating fallback chunks: {e}")
+            return []
+
+    def process_syllabus_to_chunks(self, file_path):
+        """
+        Process a syllabus JSON file and convert to intelligent chunks
+
+        Args:
+            file_path: Path to JSON file
+
+        Returns:
+            list: List of Document objects with intelligent chunking
+        """
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                json_data = json.load(f)
+
+            return self.convert_syllabus_to_intelligent_chunks(json_data)
+
+        except Exception as e:
+            print(f"Error processing syllabus file {file_path}: {e}")
+            return []
+
 # For testing
 if __name__ == "__main__":
     converter = SyllabusConverter()
@@ -516,13 +947,13 @@ if __name__ == "__main__":
     if os.path.exists(test_file):
         # Test syllabus detection
         print(f"Is {test_file} a syllabus file? {converter.is_syllabus_file(test_file)}")
-        
+
         # Test plain text conversion
-        plain_text = converter.process_syllabus_file(test_file, output_format="plain_text")
+        plain_text = converter.process_syllabus_to_chunks(test_file)
         print("\nPLAIN TEXT CONVERSION:")
         print(f"Total length: {len(plain_text)} characters")
         print(plain_text)  # Show first 500 chars
-        
+
         # Test summary format
         summary = converter.process_syllabus_file(test_file, output_format="summary")
         print("\nSUMMARY FORMAT:")

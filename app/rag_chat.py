@@ -9,11 +9,12 @@ from langchain_core.messages import HumanMessage, BaseMessage
 from langchain.prompts import PromptTemplate
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langchain_openai import ChatOpenAI
+from langchain_community.chat_models.openai import ChatOpenAI
 from app.vector_store import VectorStore
 from app.pre_retrieval import PreRetrieval
 from app.post_retrieval import PostRetrieval
 from app.config import settings
+from app.MultiModelChatAPI import MultiModelChatAPI
 import aiosqlite
 
 # Cấu hình logging với level cao hơn để giảm overhead
@@ -35,72 +36,70 @@ class RAGChat:
         self.query_rewriter = PreRetrieval()
         self.post_retrieval = PostRetrieval()  # Khởi tạo PostRetrieval để áp dụng reranking
 
-        self.system_prompt = """Bạn là *Trợ lý Sinh viên FPTU* được huấn luyện để chỉ trả lời dựa trên thông tin có sẵn.
-**NGUYÊN TẮC TUYỆT ĐỐI:**
-- CHỈ sử dụng thông tin có trong Context được cung cấp
-- KHÔNG được thêm kiến thức từ bên ngoài context
-- KHÔNG được trả lời user query tổng quát (toán học, khoa học, lập trình)
+        # Optimized system prompt using structured approach
+        self.system_prompt = """<ROLE>Trợ lý Sinh viên FPTU</ROLE>
 
-**QUY TẮC TRÍCH DẪN:**
-- Nếu context có đủ thông tin → Trả lời chính xác dựa trên context
-- Nếu context có thông tin một phần → Trả lời phần có + "Để biết thêm chi tiết, bạn liên hệ Phòng CTSV"
-- Nếu context không có thông tin → "Mình chưa có dữ liệu, bạn vui lòng liên hệ Phòng CTSV nhé."
+<CORE_RULES>
+• ONLY use information from provided Context
+• NO external knowledge beyond Context
+• NO general queries (math, science, programming)
+</CORE_RULES>
 
-**XỬ LÝ CÂU HỎI ĐẶC BIỆT:**
-- Câu hỏi Yes/No: Kiểm tra thông tin trong context, trả lời "Đúng" hoặc "Không đúng" + giải thích dựa trên context
-- Câu hỏi so sánh/xác minh: So sánh thông tin trong câu hỏi với thông tin trong context, nếu sai thì đưa ra thông tin đúng từ context
+<RESPONSE_LOGIC>
+IF Context contains sufficient info → Answer based on Context
+IF Context has partial info → Answer partial + "Liên hệ Phòng Dịch Vụ Sinh Viên để biết thêm"
+IF Context lacks info → "Mình chưa có dữ liệu, bạn liên hệ Phòng Dịch Vụ Sinh Viên nhé"
+IF Context parts combine for clear conclusion → Provide logical conclusion
+</RESPONSE_LOGIC>
 
-**ĐƯỢC PHÉP SỬ DỤNG:**
-- So sánh thông tin có trong context
-- Tổng hợp thông tin từ nhiều phần của context
-- Phân tích mối quan hệ giữa các thông tin trong context
-- Rút ra kết luận logic dựa trên thông tin có sẵn trong context
-**CÁCH TRẢ LỜI:**
-- Dùng "bạn/mình", thân thiện
-- Trích dẫn trực tiếp từ context
-- Có thể tổng hợp và so sánh thông tin trong context
-- Không đặt câu hỏi ngược lại
-**TUYỆT ĐỐI KHÔNG:**
-- Sử dụng kiến thức tổng quát không có trong context
-- Thêm thông tin từ bên ngoài context
-- Giải thích khái niệm không có trong context"""
+<SPECIAL_CASES>
+• Yes/No questions: "Đúng/Không đúng" + Context-based explanation
+• Comparison/Verification: Compare with Context, correct if wrong
+</SPECIAL_CASES>
+
+<OUTPUT_STYLE>
+• Use "bạn/mình" tone
+• Quote directly from Context when possible
+• Synthesize multiple Context parts if needed
+• NO reverse questions
+</OUTPUT_STYLE>"""
 
         # Sử dụng singleton LLM để tránh tạo mới nhiều lần
         if RAGChat._llm_instance is None:
-            RAGChat._llm_instance = ChatOpenAI(
-                model=settings.model_name,
-                temperature=settings.temperature,
-                api_key=settings.openai_api_key,
-                max_retries=2,  # Giảm retries để phản hồi nhanh hơn
-                timeout=30,  # Timeout 30s thay vì mặc định 60s
-                streaming=True,
+            # RAGChat._llm_instance = ChatOpenAI(
+            #     model=settings.model_name,
+            #     temperature=settings.temperature,
+            #     api_key=settings.openai_api_key,
+            #     max_retries=2,  # Giảm retries để phản hồi nhanh hơn
+            #     timeout=30,  # Timeout 30s thay vì mặc định 60s
+            #     streaming=True,
+            # )
+            RAGChat._llm_instance = MultiModelChatAPI(
+                api_key=settings.multi_model_api_key,
+                model_name="gemini-2.0-flash",
+                api_url=settings.multi_model_api_url,
             )
         self.llm = RAGChat._llm_instance
 
-        # Cache prompt template
+        # Optimized prompt template with clear structure and delimiters
         self.prompt_template = PromptTemplate.from_template(
             """{system_prompt}
 
----
-
-Context được cung cấp: 
+<CONTEXT>
 {context}
+</CONTEXT>
 
----
+<QUERY>
+{question}
+</QUERY>
 
-User query cần trả lời: {question}
+<INSTRUCTIONS>
+1. Analyze CONTEXT for relevant information
+2. Check if CONTEXT contains answer to QUERY
+3. Respond using RESPONSE_LOGIC above
+</INSTRUCTIONS>
 
----
-
-**HƯỚNG DẪN XỬ LÝ:**
-1. Đọc kỹ Context trên
-2. Kiểm tra xem Context có chứa thông tin để trả lời user query không
-3. Nếu CÓ → Trả lời dựa hoàn toàn trên thông tin trong Context
-4. Nếu KHÔNG → Trả lời "Mình chưa có dữ liệu, bạn vui lòng liên hệ Phòng CTSV nhé."
-
-**LƯU Ý:** Tuyệt đối không được thêm thông tin từ bên ngoài Context.
-
-Trả lời:"""
+<RESPONSE>"""
         )
 
         # Khởi tạo LangGraph với memory để lưu lịch sử theo thread_id
@@ -149,28 +148,18 @@ Trả lời:"""
         # Node: truy xuất tài liệu với parallel processing, subqueries và reranking
         async def retrieve(state: GraphState):
             question = state["messages"][-1].content
-
-            # Lấy subqueries từ state nếu có, nếu không thì chỉ dùng câu hỏi gốc
             subqueries = state.get('subqueries', [question])
 
-            print(len(subqueries))
+            print(f"🔄 Processing {len(subqueries)} subqueries")
 
-            # Tối ưu: giảm k cho mỗi query để tổng số docs không quá lớn
-            k_per_query = max(1, min(3, 6 // (len(subqueries) - 1)))
-
-            # Tìm kiếm song song với tất cả các câu hỏi phụ
-            search_tasks = []
-            for query in subqueries:
-                task = asyncio.create_task(
-                    self.vector_store.similarity_search(query, k=k_per_query)
-                )
-                search_tasks.append(task)
+            # Tối ưu k per query
+            k_per_query = max(1, min(3, 6 // (len(subqueries))))
 
             try:
-                # Chờ tất cả các tìm kiếm hoàn thành với timeout
+                # Sử dụng batch search thay vì individual searches
                 all_results = await asyncio.wait_for(
-                    asyncio.gather(*search_tasks, return_exceptions=True),
-                    timeout=20.0
+                    self.vector_store.batch_similarity_search(subqueries, k=k_per_query),
+                    timeout=15.0  # Giảm timeout vì batch nhanh hơn
                 )
 
                 # Kết hợp và loại bỏ trùng lặp
@@ -180,40 +169,24 @@ Trả lời:"""
                 for results in all_results:
                     if isinstance(results, list):  # Kiểm tra không phải exception
                         for doc in results:
-                            # Sử dụng hash của content để kiểm tra trùng lặp
-                            content_hash = hash(doc.page_content)
+                            content_hash = hash(doc.page_content[:200])  # Hash 200 chars đầu
                             if content_hash not in seen_content:
                                 seen_content.add(content_hash)
                                 combined_docs.append(doc)
 
-                # Áp dụng LLM-based reranking nếu có nhiều documents
-                # if len(combined_docs) > 4:
-                #     try:
-                #         # Sử dụng method llm_rerank public thay vì _llm_rerank private
-                #         reranked_docs = await asyncio.wait_for(
-                #             self.post_retrieval.llm_rerank(question, combined_docs, top_k=4),
-                #             timeout=15.0
-                #         )
-                #         logger.info(f"LLM-based reranked {len(combined_docs)} docs to top {len(reranked_docs)}")
-                #         final_docs = reranked_docs
-                #     except asyncio.TimeoutError:
-                #         logger.warning("LLM-based reranking timeout, using original docs")
-                #         final_docs = combined_docs[:4]
-                #     except Exception as e:
-                #         logger.warning(f"LLM-based reranking failed: {e}, using original docs")
-                #         final_docs = combined_docs[:4]
-                # else:
-                final_docs = combined_docs
+                                # Early exit nếu đủ docs
+                                if len(combined_docs) >= 6:
+                                    break
 
-                return {**state, "docs": final_docs}
+                return {**state, "docs": combined_docs[:6]}
 
             except asyncio.TimeoutError:
-                logger.warning(f"Vector search timeout for subqueries")
-                # Fallback: tìm kiếm với câu hỏi gốc
+                logger.warning(f"Batch search timeout for subqueries")
+                # Fallback: single query search
                 try:
                     docs = await asyncio.wait_for(
                         self.vector_store.similarity_search(question, k=4),
-                        timeout=10.0
+                        timeout=5.0
                     )
                     return {**state, "docs": docs}
                 except:
@@ -446,4 +419,3 @@ Trả lời:"""
                 "content": "🤖 Xin lỗi, có lỗi xảy ra. Bạn vui lòng thử lại sau.",
                 "timestamp": time.time()
             }
-

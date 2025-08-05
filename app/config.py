@@ -34,15 +34,18 @@ class Settings(BaseSettings):
     temperature: float = float(os.getenv("TEMPERATURE", "0.1"))
 
     # Embedding settings
-    embedding_model: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")  # OpenAI's small embedding model
+    embedding_model: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")  # OpenAI's small embedding model
 
     # Dimension for embeddings and vector store
-    dimension: int = 3072
+    dimension: int = int(os.getenv("DIMENSION", "3072"))  # Default for OpenAI's text-embedding-3-large
 
     # Google Drive integration settings
     google_drive_folder_id: str = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "")
     google_service_account_file: str = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service-account.json")
     scheduler_interval_hours: int = int(os.getenv("SCHEDULER_INTERVAL_HOURS", "1"))
+
+    multi_model_api_key: str = os.getenv("MULTI_MODEL_API_KEY", "")
+    multi_model_api_url: str = os.getenv("MULTI_MODEL_API_URL", "")
 
     class Config:
         env_file = ".env"

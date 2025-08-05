@@ -332,23 +332,14 @@ class SmartDocumentScheduler:
                 try:
                     # Extract document name (filename without extension)
                     doc_name = json_file.replace('.json', '')
+                    file_path = os.path.join(self.data_dir, json_file)
 
                     # Check if document exists in vector store
                     if doc_name in existing_doc_names:
                         # Update existing document
                         self.logger.info(f"🔄 Updating existing JSON document: {doc_name}")
 
-                        # Process the single file
-                        file_path = os.path.join(self.data_dir, json_file)
-                        
-                        # Check if this is a syllabus file
-                        is_syllabus = self._is_syllabus_file(json_file)
-                        
-                        if is_syllabus:
-                            self.logger.info(f"📚 Detected syllabus file: {json_file}, using specialized converter")
-                            new_documents = await self._process_single_syllabus_file(file_path, doc_name)
-                        else:
-                            new_documents = await self._process_single_json_file(file_path, doc_name)
+                        new_documents = await self._process_single_syllabus_file(file_path, doc_name)
 
                         if new_documents:
                             # Update in vector store
@@ -360,19 +351,31 @@ class SmartDocumentScheduler:
                                 self.logger.info(f"✅ Updated and deleted: {json_file}")
                             else:
                                 results["errors"].append(f"Failed to update {doc_name} in vector store")
+                        else:
+                            results["errors"].append(f"Failed to process syllabus file {json_file}")
                     else:
-                        # New document - will be processed normally
-                        self.logger.info(f"📄 New JSON document detected: {doc_name}")
-                        results["processed"] += 1
+                        # New document - process using syllabus converter
+                        self.logger.info(f"📄 Processing new JSON document with intelligent chunking: {doc_name}")
+
+                        new_documents = await self._process_single_syllabus_file(file_path, doc_name)
+
+                        if new_documents:
+                            # Add to vector store
+                            success = await self.vector_store.add_documents(new_documents)
+                            if success:
+                                results["processed"] += 1
+                                # Delete processed file
+                                os.remove(file_path)
+                                self.logger.info(f"✅ Processed new syllabus and deleted: {json_file}")
+                            else:
+                                results["errors"].append(f"Failed to add {doc_name} to vector store")
+                        else:
+                            results["errors"].append(f"Failed to process new syllabus file {json_file}")
 
                 except Exception as e:
                     error_msg = f"Error processing JSON file {json_file}: {str(e)}"
                     self.logger.error(f"❌ {error_msg}")
                     results["errors"].append(error_msg)
-
-            # Process any remaining new JSON files normally
-            if results["processed"] > 0:
-                await self.document_processor.load_and_process_documents(delete_after_load=True)
 
         except Exception as e:
             results["errors"].append(f"Error in JSON processing: {str(e)}")
@@ -380,37 +383,26 @@ class SmartDocumentScheduler:
         return results
         
     async def _process_single_syllabus_file(self, file_path: str, doc_name: str) -> List:
-        """Process a single syllabus JSON file and return documents using the specialized syllabus converter"""
+        """Process a single syllabus JSON file and return documents using the specialized syllabus converter with intelligent chunking"""
         try:
-            from langchain.schema import Document
-            
-            # Use syllabus converter to convert JSON to structured plain text
-            plain_text = self.syllabus_converter.process_syllabus_file(file_path)
-            
-            if not plain_text:
-                self.logger.error(f"Failed to convert syllabus file: {file_path}")
+            # Use syllabus converter's improved process_syllabus_to_chunks method
+            syllabus_chunks = self.syllabus_converter.process_syllabus_to_chunks(file_path)
+
+            if not syllabus_chunks:
+                self.logger.error(f"Failed to create intelligent chunks for syllabus file: {file_path}")
                 return []
-                
-            # Create document with the converted text
-            doc = Document(
-                page_content=plain_text,
-                metadata={
+
+            # Add source file path to metadata of each chunk
+            for chunk in syllabus_chunks:
+                chunk.metadata.update({
                     "name": doc_name,
                     "type": "Syllabus",
                     "source": file_path
-                }
-            )
-            
-            # Split document
-            splits = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: self.document_processor.text_splitter.split_documents([doc])
-            )
-            
-            # Enhance with filename prefix
-                
-            self.logger.info(f"Processed syllabus file {file_path} into {len(splits)} chunks")
-            return splits
-            
+                })
+
+            self.logger.info(f"Processed syllabus file {file_path} into {len(syllabus_chunks)} intelligent chunks")
+            return syllabus_chunks
+
         except Exception as e:
             self.logger.error(f"Error processing syllabus file {file_path}: {e}")
             return []

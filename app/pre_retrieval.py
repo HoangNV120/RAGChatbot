@@ -1,38 +1,79 @@
-from typing import Dict, List, Optional
+from typing import Dict
 import logging
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
+
+from app.MultiModelChatAPI import MultiModelChatAPI
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 class PreRetrieval:
     def __init__(self):
-        self.llm = ChatOpenAI(
-            model=settings.model_name,
-            temperature=0.3,  # Tăng temperature để có tính sáng tạo hơn cho query expansion
-            api_key=settings.openai_api_key,
-            max_tokens=300  # Tăng max_tokens để có thể sinh nhiều câu hỏi phụ hơn
+        # self.llm = ChatOpenAI(
+        #     model=settings.model_name,
+        #     temperature=0.3,  # Tăng temperature để có tính sáng tạo hơn cho query expansion
+        #     api_key=settings.openai_api_key,
+        #     max_tokens=300  # Tăng max_tokens để có thể sinh nhiều câu hỏi phụ hơn
+        # )
+        self.llm = MultiModelChatAPI(
+            api_key=settings.multi_model_api_key,
+            model_name="gpt-4o-mini",
+            api_url=settings.multi_model_api_url,
         )
 
-        # Prompt được tối ưu hóa cho tạo subqueries (hỗ trợ cả tiếng Việt và tiếng Anh)
-        self.subquery_prompt = """Hãy phân tích câu hỏi sau và tạo ra từ 1 đến 3 câu hỏi phụ để tìm kiếm thông tin hiệu quả hơn.
+        # Optimized prompt using structured approach with clear delimiters
+        self.subquery_prompt = """<ROLE>Query Analysis Expert</ROLE>
 
-Câu hỏi chính: "{query}"
+<TASK>Analyze the following question and decide how to process it:</TASK>
 
-Yêu cầu:
-1. Giữ nguyên ý nghĩa chính của câu hỏi gốc
-2. Tạo thêm các câu hỏi phụ với từ khóa khác nhau bằng tiếng Việt
-3. Mở rộng ngữ cảnh liên quan
-4. Mỗi câu hỏi phụ trên 1 dòng, không đánh số
+<INPUT_QUERY>
+{query}
+</INPUT_QUERY>
 
-Ví dụ:
-Câu hỏi chính: "Làm thế nào để đăng ký học phần?"
-Các câu hỏi phụ:
+<PROCESSING_RULES>
+COMPLEX Questions (multiple subjects/concepts/requires reasoning):
+→ Generate EXACTLY 3 questions: original + 2 sub-questions
+→ Each sub-question focuses on 1 specific aspect
+→ Original question always comes first
+
+SIMPLE Questions (single clear topic):
+→ Generate EXACTLY 1 question (rewrite original for clarity)
+→ Use standard keywords and formal terminology
+</PROCESSING_RULES>
+
+<CONSTRAINTS>
+• Total questions: MAX 3
+• Complex → EXACTLY 3 questions
+• Simple → EXACTLY 1 question
+</CONSTRAINTS>
+
+<EXAMPLES>
+Complex: "Nếu tôi được 4 điểm tổng kết môn PRO192 thì có được học môn PRJ301 không?"
+Output:
+Nếu tôi được 4 điểm tổng kết môn PRO192 thì có được học môn PRJ301 không?
+Điều kiện tiên quyết để học môn PRJ301 là gì?
+Môn PRO192 cần đạt điểm tổng kết bao nhiêu để qua môn?
+
+Simple: "làm sao đăng ký học phần"
+Output:
 Làm thế nào để đăng ký học phần?
-Quy trình đăng ký môn học như thế nào?
+</EXAMPLES>
 
-Hãy tạo các câu hỏi phụ cho câu hỏi trên:"""
+<OUTPUT_FORMAT>
+• One question per line
+• NO numbering, NO bullet points
+• NO explanations or comments
+• Pure questions only
+</OUTPUT_FORMAT>
+
+<INSTRUCTIONS>
+1. Analyze INPUT_QUERY complexity
+2. Apply appropriate PROCESSING_RULES
+3. Generate questions following OUTPUT_FORMAT
+</INSTRUCTIONS>
+
+Process the query above:"""
 
     async def analyze_and_rewrite(self, query: str) -> Dict[str, any]:
         """
@@ -45,34 +86,37 @@ Hãy tạo các câu hỏi phụ cho câu hỏi trên:"""
 
             result = response.content.strip()
 
-            # Tách các câu hỏi phụ thành danh sách
+            # Tách các câu hỏi phụ thành danh sách đơn giản
             subqueries = []
             lines = result.split('\n')
 
             for line in lines:
                 line = line.strip()
-                # Loại bỏ các dòng trống và dòng không phải câu hỏi
-                if (line and len(line) > 10 and
-                    not line.startswith('Câu hỏi') and
-                    not line.startswith('Các câu hỏi') and
-                    line != "Các câu hỏi phụ:"):
-                    # Loại bỏ số thứ tự nếu có
-                    if line[0].isdigit() and line[1:3] in ['. ', ') ']:
-                        line = line[3:]
-                    elif line[0].isdigit() and line[1] in ['.', ')']:
-                        line = line[2:]
-                    subqueries.append(line.strip())
+                # Chỉ loại bỏ dòng trống, giữ lại tất cả dòng có nội dung
+                if line:
+                    # Loại bỏ số thứ tự ở đầu dòng nếu có (1., 2., 1), 2))
+                    if len(line) > 2 and line[0].isdigit():
+                        if line[1:3] in ['. ', ') ']:
+                            line = line[3:].strip()
+                        elif line[1] in ['.', ')']:
+                            line = line[2:].strip()
+
+                    # Loại bỏ dấu gạch đầu dòng nếu có
+                    if line.startswith('- '):
+                        line = line[2:].strip()
+                    elif line.startswith('* '):
+                        line = line[2:].strip()
+
+                    # Thêm vào danh sách nếu còn nội dung sau khi clean
+                    if line:
+                        subqueries.append(line)
 
             # Nếu không tạo được câu hỏi phụ, sử dụng câu hỏi gốc
             if not subqueries:
                 subqueries = [query]
 
-            # Đảm bảo câu hỏi gốc luôn có trong danh sách
-            if query not in subqueries:
-                subqueries.insert(0, query)
-
-            # Giới hạn tối đa 4 câu hỏi để tránh quá tải
-            subqueries = subqueries[:4]
+            # Giới hạn tối đa 3 câu hỏi như đã quy định trong prompt
+            subqueries = subqueries[:3]
 
             return {
                 "can_process": True,
@@ -87,4 +131,3 @@ Hãy tạo các câu hỏi phụ cho câu hỏi trên:"""
                 "rewritten_query": query,
                 "subqueries": [query]
             }
-
