@@ -1,16 +1,9 @@
-import asyncio
-import json
-import time
-
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from sse_starlette.sse import EventSourceResponse
 from pydantic import BaseModel
-from typing import Optional, Dict, Any, AsyncGenerator
+from typing import Optional, Dict, Any
 from app.master_chatbot import MasterChatbot
 from app.document_processor import DocumentProcessor
-from app.smart_scheduler import SmartDocumentScheduler
 import uvicorn
 from contextlib import asynccontextmanager
 import os
@@ -29,17 +22,11 @@ logger = logging.getLogger(__name__)
 # Global variables để store instances
 master_chatbot = None
 doc_processor = None
-smart_scheduler = None
-
-# Configuration for Google Drive integration
-GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "YOUR_FOLDER_ID_HERE")
-GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service-account.json")
-SCHEDULER_INTERVAL_HOURS = int(os.getenv("SCHEDULER_INTERVAL_HOURS", "1"))  # Default: every hour
 
 # Define lifespan context manager for startup/shutdown events
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global master_chatbot, doc_processor, smart_scheduler
+    global master_chatbot, doc_processor
 
     # Startup: Initialize components
     print("🚀 Initializing RAG Chatbot components...")
@@ -306,6 +293,122 @@ async def update_document(request: DocumentUpdateRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error updating document: {str(e)}")
+
+@app.get("/collections/info")
+async def get_collections_info():
+    """Get information about both collections"""
+    try:
+        info = {}
+
+        # ragchatbot collection info
+        try:
+            main_info = doc_processor.vector_store.client.get_collection(doc_processor.vector_store.vector_store.collection_name)
+            info["ragchatbot"] = {
+                "points_count": main_info.points_count,
+                "vectors_count": main_info.vectors_count,
+                "status": main_info.status,
+                "collection_name": doc_processor.vector_store.vector_store.collection_name
+            }
+        except Exception as e:
+            info["ragchatbot"] = {"error": str(e)}
+
+        # ragsmall collection info
+        small_info = vector_store_small.get_collection_info()
+        info["ragsmall"] = small_info
+
+        return info
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting collections info: {str(e)}")
+
+@app.post("/chat/compare")
+async def compare_collections_search(request: ChatRequest):
+    """Compare search results between ragchatbot and ragsmall collections"""
+    if not request.chatInput:
+        raise HTTPException(status_code=400, detail="Query is required")
+
+    try:
+        results = {}
+
+        # Search in ragchatbot (main collection)
+        try:
+            main_results = await doc_processor.vector_store.similarity_search_with_score(
+                query=request.chatInput,
+                k=3
+            )
+
+            results["ragchatbot"] = [
+                {
+                    "score": float(score),
+                    "content": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
+                    "category": doc.metadata.get('category', 'NO_CATEGORY'),
+                    "source": doc.metadata.get('source', 'NO_SOURCE')
+                }
+                for doc, score in main_results
+            ]
+        except Exception as e:
+            results["ragchatbot"] = {"error": str(e)}
+
+        # Search in ragsmall (now integrated in master_chatbot)
+        try:
+            small_results = await vector_store_small.similarity_search_with_score(
+                query=request.chatInput,
+                k=3
+            )
+
+            results["ragsmall"] = [
+                {
+                    "score": float(score),
+                    "question": doc.page_content,
+                    "answer": doc.metadata.get('answer', '')[:200] + "..." if len(doc.metadata.get('answer', '')) > 200 else doc.metadata.get('answer', ''),
+                    "category": doc.metadata.get('category', 'NO_CATEGORY'),
+                    "source": doc.metadata.get('source', 'NO_SOURCE')
+                }
+                for doc, score in small_results
+            ]
+        except Exception as e:
+            results["ragsmall"] = {"error": str(e)}
+
+        return {
+            "query": request.chatInput,
+            "results": results,
+            "note": "Comparison between dual vector stores used by single MasterChatbot"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error comparing collections: {str(e)}")
+
+@app.post("/router/test")
+async def test_category_router(request: ChatRequest):
+    """Test CategoryPartitionedRouter với dual vector store flow"""
+    if not request.chatInput:
+        raise HTTPException(status_code=400, detail="Query is required")
+
+    try:
+        # Test classification only (không full routing)
+        classification_result = await master_chatbot.router._classify_query_category(request.chatInput)
+
+        return {
+            "query": request.chatInput,
+            "classification_result": classification_result,
+            "note": "New flow: Single chatbot with dual vector stores"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error testing router: {str(e)}")
+
+@app.get("/router/stats")
+async def get_router_stats():
+    """Get router statistics for dual vector store setup"""
+    try:
+        stats = {
+            "architecture": "Single MasterChatbot with dual vector stores",
+            "main_vector_store": "ragchatbot (for RAG_CHAT)",
+            "small_vector_store": "ragsmall (for quick search)",
+            "router_stats": master_chatbot.router.get_stats()
+        }
+        return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting router stats: {str(e)}")
 
 if __name__ == "__main__":
     try:
