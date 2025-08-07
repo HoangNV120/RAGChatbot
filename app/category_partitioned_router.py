@@ -28,11 +28,12 @@ class CategoryPartitionedRouter:
             model_name="gpt-4o-mini",
             temperature=0
         )
-        
+
+
         # Initialize embeddings cho vector search
         self.embeddings = OpenAIEmbeddings(
             openai_api_key=settings.openai_api_key,
-            model="text-embedding-ada-002"
+            model=settings.embedding_model
         )
         
         # Use existing vector store (Qdrant) instead of local cache

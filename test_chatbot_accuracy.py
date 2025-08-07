@@ -343,14 +343,14 @@ class ChatbotAccuracyTester:
         if num_samples and num_samples < len(df_valid):
             df_valid = df_valid.sample(n=num_samples, random_state=42)
             print(f"🎲 Sampling {num_samples} test cases for testing")
-        
-        # Test API connection
-        print(f"\n🔍 Testing API connection...")
-        test_response, success, error, _ = self.call_api("Hello test", timeout=10)
-        if not success:
-            print(f"❌ API connection failed: {error}")
-            return
-        print("✅ API connection successful")
+        #
+        # # Test API connection
+        # print(f"\n🔍 Testing API connection...")
+        # test_response, success, error, _ = self.call_api("Hello test", timeout=10)
+        # if not success:
+        #     print(f"❌ API connection failed: {error}")
+        #     return
+        # print("✅ API connection successful")
         
         # Chạy accuracy test
         print(f"\n🧪 Running accuracy test on {len(df_valid)} questions...")

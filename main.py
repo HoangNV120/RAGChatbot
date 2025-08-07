@@ -1,13 +1,23 @@
+import json
+import time
+import asyncio
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
+
+from sse_starlette import EventSourceResponse
+
+from app import smart_scheduler, vector_store_small
 from app.master_chatbot import MasterChatbot
 from app.document_processor import DocumentProcessor
 import uvicorn
 from contextlib import asynccontextmanager
 import os
 import logging
+
+from app.vector_store_small import VectorStoreSmall
 
 # Cấu hình logging để hiển thị log routing
 logging.basicConfig(
@@ -31,13 +41,21 @@ async def lifespan(app: FastAPI):
     # Startup: Initialize components
     print("🚀 Initializing RAG Chatbot components...")
 
-    # Create document processor
+    # 1. Khởi tạo Document processor và vector store cho RAG (ragchatbot collection)
     data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app", "data")
-    print(f"Setting data directory to: {data_dir}")
+    print(f"[INFO] Setting data directory to: {data_dir}")
     doc_processor = DocumentProcessor(data_dir=data_dir)
 
-    # Initialize Master Chatbot
-    master_chatbot = MasterChatbot(vector_store=doc_processor.vector_store)
+    # 2. Khởi tạo VectorStoreSmall cho ragsmall collection
+    print(f"[INFO] Initializing ragsmall vector store...")
+    vector_store_small = VectorStoreSmall()
+
+    # 3. Initialize Master Chatbot với dual vector stores
+    print(f"[INFO] Initializing Master Chatbot with dual vector stores...")
+    master_chatbot = MasterChatbot(
+        vector_store=doc_processor.vector_store,  # Main vector store (ragchatbot)
+        vector_store_small=vector_store_small     # Small vector store (ragsmall)
+    )
 
     # Initialize Smart Scheduler with Google Drive integration
     # if GOOGLE_DRIVE_FOLDER_ID != "YOUR_FOLDER_ID_HERE":
@@ -65,10 +83,10 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown: Stop scheduler and cleanup
-    print("🔄 Shutting down application...")
-    if smart_scheduler:
-        smart_scheduler.stop_scheduler()
-    print("✅ Application shutdown complete")
+    # print("🔄 Shutting down application...")
+    # if smart_scheduler:
+    #     smart_scheduler.stop_scheduler()
+    # print("✅ Application shutdown complete")
 
 # Initialize FastAPI with lifespan
 app = FastAPI(title="RAG Chatbot API", lifespan=lifespan)
