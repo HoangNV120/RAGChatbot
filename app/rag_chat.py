@@ -66,19 +66,19 @@ IF Context parts combine for clear conclusion → Provide logical conclusion
 
         # Sử dụng singleton LLM để tránh tạo mới nhiều lần
         if RAGChat._llm_instance is None:
-            RAGChat._llm_instance = ChatOpenAI(
-                model=settings.model_name,
-                temperature=settings.temperature,
-                api_key=settings.openai_api_key,
-                max_retries=2,  # Giảm retries để phản hồi nhanh hơn
-                timeout=30,  # Timeout 30s thay vì mặc định 60s
-                streaming=True,
-            )
-            # RAGChat._llm_instance = MultiModelChatAPI(
-            #     api_key=settings.multi_model_api_key,
-            #     model_name="gemini-2.0-flash",
-            #     api_url=settings.multi_model_api_url,
+            # RAGChat._llm_instance = ChatOpenAI(
+            #     model=settings.model_name,
+            #     temperature=settings.temperature,
+            #     api_key=settings.openai_api_key,
+            #     max_retries=2,  # Giảm retries để phản hồi nhanh hơn
+            #     timeout=30,  # Timeout 30s thay vì mặc định 60s
+            #     streaming=True,
             # )
+            RAGChat._llm_instance = MultiModelChatAPI(
+                api_key=settings.multi_model_api_key,
+                model_name="gemini-2.0-flash",
+                api_url=settings.multi_model_api_url,
+            )
         self.llm = RAGChat._llm_instance
 
         # Optimized prompt template with clear structure and delimiters

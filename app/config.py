@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     # Qdrant settings
     qdrant_url: str = os.getenv("QDRANT_URL", "http://localhost:6333")
     qdrant_api_key: Optional[str] = os.getenv("QDRANT_API_KEY")
-    collection_name: str = os.getenv("COLLECTION_NAME", "ragchatbot2")
+    collection_name: str = os.getenv("COLLECTION_NAME", "ragchatbot4")
 
     # Routing collection settings
     routing_collection_name: str = os.getenv("ROUTING_COLLECTION_NAME", "routing_questions")

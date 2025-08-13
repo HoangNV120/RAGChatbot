@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 import asyncio
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -97,15 +98,29 @@ class CategoryPartitionedRouter:
     async def _classify_query_category(self, query: str) -> Dict:
         """Bước 1: Phân loại category bằng LLM với Prompt Engineering cao cấp"""
         
-        # 🚀 CACHE CHECK để đảm bảo consistency
+        # 🕐 CACHE CHECK để đảm bảo consistency
+        cache_check_start_time = time.time()
+        print(f"🕐 [TIMER] CACHE_CHECK START: {time.strftime('%H:%M:%S', time.localtime(cache_check_start_time))}")
+
         import hashlib
         query_hash = hashlib.md5(query.lower().strip().encode()).hexdigest()
         
         if query_hash in self.classification_cache:
             cached_result = self.classification_cache[query_hash]
+            cache_check_end_time = time.time()
+            cache_check_duration = cache_check_end_time - cache_check_start_time
+            print(f"🕐 [TIMER] CACHE_CHECK END (HIT): {time.strftime('%H:%M:%S', time.localtime(cache_check_end_time))} - Duration: {cache_check_duration:.3f}s")
             print(f"🎯 Using cached classification: {cached_result['category']}")
             return cached_result
         
+        cache_check_end_time = time.time()
+        cache_check_duration = cache_check_end_time - cache_check_start_time
+        print(f"🕐 [TIMER] CACHE_CHECK END (MISS): {time.strftime('%H:%M:%S', time.localtime(cache_check_end_time))} - Duration: {cache_check_duration:.3f}s")
+
+        # 🕐 LLM CALL START
+        llm_start_time = time.time()
+        print(f"🕐 [TIMER] LLM_CLASSIFICATION START: {time.strftime('%H:%M:%S', time.localtime(llm_start_time))}")
+
         system_prompt = f"""Bạn là chuyên gia phân loại câu hỏi về trường đại học với độ chính xác 100%. Nhiệm vụ của bạn là phân loại câu hỏi vào ĐÚNG MỘT trong các danh mục sau:
 
 📚 DANH MỤC CỤ THỂ (7 loại):
@@ -152,12 +167,33 @@ class CategoryPartitionedRouter:
 CHỈ TRẢ VỀ TÊN DANH MỤC DUY NHẤT - KHÔNG GIẢI THÍCH GÌ THÊM."""
 
         try:
+            # 🕐 MESSAGE PREPARATION
+            message_prep_start_time = time.time()
+            print(f"🕐 [TIMER] MESSAGE_PREP START: {time.strftime('%H:%M:%S', time.localtime(message_prep_start_time))}")
+
             messages = [
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=f"Phân loại câu hỏi: \"{query}\"")
             ]
             
+            message_prep_end_time = time.time()
+            message_prep_duration = message_prep_end_time - message_prep_start_time
+            print(f"🕐 [TIMER] MESSAGE_PREP END: {time.strftime('%H:%M:%S', time.localtime(message_prep_end_time))} - Duration: {message_prep_duration:.3f}s")
+
+            # 🕐 LLM API CALL
+            llm_api_start_time = time.time()
+            print(f"🕐 [TIMER] LLM_API_CALL START: {time.strftime('%H:%M:%S', time.localtime(llm_api_start_time))}")
+
             response = await self.llm.agenerate([messages])
+
+            llm_api_end_time = time.time()
+            llm_api_duration = llm_api_end_time - llm_api_start_time
+            print(f"🕐 [TIMER] LLM_API_CALL END: {time.strftime('%H:%M:%S', time.localtime(llm_api_end_time))} - Duration: {llm_api_duration:.3f}s")
+
+            # 🕐 RESPONSE PROCESSING
+            response_proc_start_time = time.time()
+            print(f"🕐 [TIMER] RESPONSE_PROCESSING START: {time.strftime('%H:%M:%S', time.localtime(response_proc_start_time))}")
+
             category = response.generations[0][0].text.strip().upper()
             category = category.replace(".", "").replace(",", "").replace(":", "").strip()
             
@@ -175,11 +211,34 @@ CHỈ TRẢ VỀ TÊN DANH MỤC DUY NHẤT - KHÔNG GIẢI THÍCH GÌ THÊM."""
                     "should_use_vector": False
                 }
             
+            response_proc_end_time = time.time()
+            response_proc_duration = response_proc_end_time - response_proc_start_time
+            print(f"🕐 [TIMER] RESPONSE_PROCESSING END: {time.strftime('%H:%M:%S', time.localtime(response_proc_end_time))} - Duration: {response_proc_duration:.3f}s")
+
+            # 🕐 CACHE SAVE
+            cache_save_start_time = time.time()
+            print(f"🕐 [TIMER] CACHE_SAVE START: {time.strftime('%H:%M:%S', time.localtime(cache_save_start_time))}")
+
             # Cache result
             self.classification_cache[query_hash] = result
+
+            cache_save_end_time = time.time()
+            cache_save_duration = cache_save_end_time - cache_save_start_time
+            print(f"🕐 [TIMER] CACHE_SAVE END: {time.strftime('%H:%M:%S', time.localtime(cache_save_end_time))} - Duration: {cache_save_duration:.3f}s")
+
+            # 🕐 TOTAL LLM CLASSIFICATION END
+            llm_end_time = time.time()
+            llm_total_duration = llm_end_time - llm_start_time
+            print(f"🕐 [TIMER] LLM_CLASSIFICATION TOTAL END: {time.strftime('%H:%M:%S', time.localtime(llm_end_time))} - Total Duration: {llm_total_duration:.3f}s")
+            print(f"🕐 [LLM_BREAKDOWN] Message Prep: {message_prep_duration:.3f}s | API Call: {llm_api_duration:.3f}s | Response Processing: {response_proc_duration:.3f}s | Cache Save: {cache_save_duration:.3f}s")
+
             return result
                 
         except Exception as e:
+            llm_error_time = time.time()
+            llm_error_duration = llm_error_time - llm_start_time
+            print(f"🕐 [TIMER] LLM_CLASSIFICATION ERROR: {time.strftime('%H:%M:%S', time.localtime(llm_error_time))} - Duration: {llm_error_duration:.3f}s")
+
             logger.error(f"Error in LLM classification: {e}")
             return {
                 "category": "KHÁC",
@@ -480,7 +539,7 @@ CHỈ TRẢ VỀ TÊN DANH MỤC DUY NHẤT - KHÔNG GIẢI THÍCH GÌ THÊM."""
                 else:
                     categories_found[category] = 1
             
-            print(f"\n📋 Category Summary in Qdrant:")
+            print(f"\n���� Category Summary in Qdrant:")
             for category, count in categories_found.items():
                 print(f"   '{category}': {count} documents")
                 

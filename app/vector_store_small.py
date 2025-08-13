@@ -5,6 +5,7 @@ from qdrant_client.http import models
 from app.config import settings
 import os
 import asyncio
+import time
 
 class VectorStoreSmall:
     """
@@ -83,9 +84,29 @@ class VectorStoreSmall:
         Returns:
             List of tuples (document, score)
         """
-        return await asyncio.get_event_loop().run_in_executor(
-            None, lambda: self.vector_store.similarity_search_with_score(query, k=k)
-        )
+        # 🕐 VECTOR SEARCH START
+        vector_search_start_time = time.time()
+        print(f"🕐 [TIMER] VECTOR_SEARCH_WITH_SCORE START: {time.strftime('%H:%M:%S', time.localtime(vector_search_start_time))}")
+        print(f"🔍 [RAGSMALL] Searching for query: '{query[:50]}...' with k={k}")
+
+        try:
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: self.vector_store.similarity_search_with_score(query, k=k)
+            )
+
+            vector_search_end_time = time.time()
+            vector_search_duration = vector_search_end_time - vector_search_start_time
+            print(f"🕐 [TIMER] VECTOR_SEARCH_WITH_SCORE END: {time.strftime('%H:%M:%S', time.localtime(vector_search_end_time))} - Duration: {vector_search_duration:.3f}s")
+            print(f"📊 [RAGSMALL] Found {len(result)} results")
+
+            return result
+
+        except Exception as e:
+            vector_search_error_time = time.time()
+            vector_search_error_duration = vector_search_error_time - vector_search_start_time
+            print(f"🕐 [TIMER] VECTOR_SEARCH_WITH_SCORE ERROR: {time.strftime('%H:%M:%S', time.localtime(vector_search_error_time))} - Duration: {vector_search_error_duration:.3f}s")
+            print(f"❌ [RAGSMALL] Error: {e}")
+            raise
 
     async def add_documents(self, documents):
         """

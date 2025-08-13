@@ -52,148 +52,160 @@ class MasterChatbot:
         """
         Phương thức chính để xử lý query với dual vector store flow
 
-        Luồng mới:
-        1. LLM Classification
-        2. If category = "KHÁC" → Direct RAG_CHAT (main vector_store)
-        3. If category hợp lệ → ragsmall search (vector_store_small)
-        4. If ragsmall similarity ≥ 0.8 → Return ragsmall answer
-        5. If ragsmall similarity < 0.8 → Fallback to RAG_CHAT (main vector_store)
+        Luồng mới (bỏ qua classification):
+        1. Direct search trong ragsmall (vector_store_small)
+        2. If ragsmall similarity ≥ 0.8 → Return ragsmall answer
+        3. If ragsmall similarity < 0.8 → Fallback to RAG_CHAT (main vector_store)
         """
         try:
+            # 🕐 START - Tổng thời gian processing
+            total_start_time = time.time()
+            print(f"\n🕐 [TIMER] TOTAL START: {time.strftime('%H:%M:%S', time.localtime(total_start_time))}")
             print(f"\n[PROCESSING] Query: {query[:50]}...")
 
-            # Bước 1: LLM Classification only (không dùng full routing)
-            classification_result = await self.router._classify_query_category(query)
-            category = classification_result["category"]
-            should_use_vector = classification_result["should_use_vector"]
-
-            print(f"[CLASSIFICATION] Category: {category}")
-            print(f"[CLASSIFICATION] Should use vector: {should_use_vector}")
-
-            # Bước 2: Route Decision theo luồng mới
-            if not should_use_vector or category == "KHÁC":
-                print(f"[ROUTE] Category '{category}' → Direct RAG_CHAT (main vector_store)")
-
-                # Direct RAG_CHAT với main vector_store
-                result = await self.rag_chat.generate_response(query, session_id)
-                result["route_used"] = "RAG_CHAT_DIRECT"
-                result["classification"] = classification_result
-                return result
-
-            # Bước 3: ragsmall Quick Search (vector_store_small)
-            print(f"[ROUTE] Category '{category}' → ragsmall search (vector_store_small)")
+            # 🕐 Bước 1: Direct ragsmall Quick Search (vector_store_small) - BỎ QUA CLASSIFICATION
+            print(f"[ROUTE] Direct ragsmall search (vector_store_small) - Skip classification")
 
             try:
-                # Search trong ragsmall với k=5 như yêu cầu
+                # 🕐 Search trong ragsmall với k=5
+                ragsmall_search_start_time = time.time()
+                print(f"🕐 [TIMER] RAGSMALL_SEARCH START: {time.strftime('%H:%M:%S', time.localtime(ragsmall_search_start_time))}")
+
                 ragsmall_results = await self.vector_store_small.similarity_search_with_score(
                     query=query,
                     k=5
                 )
 
+                ragsmall_search_end_time = time.time()
+                ragsmall_search_duration = ragsmall_search_end_time - ragsmall_search_start_time
+                print(f"🕐 [TIMER] RAGSMALL_SEARCH END: {time.strftime('%H:%M:%S', time.localtime(ragsmall_search_end_time))} - Duration: {ragsmall_search_duration:.3f}s")
+
                 if not ragsmall_results:
                     print(f"[RAGSMALL] No results found → Fallback to RAG_CHAT")
+
+                    # 🕐 Fallback RAG_CHAT
+                    fallback_rag_start_time = time.time()
+                    print(f"🕐 [TIMER] RAG_CHAT_FALLBACK START: {time.strftime('%H:%M:%S', time.localtime(fallback_rag_start_time))}")
+
                     result = await self.rag_chat.generate_response(query, session_id)
+
+                    fallback_rag_end_time = time.time()
+                    fallback_rag_duration = fallback_rag_end_time - fallback_rag_start_time
+                    print(f"🕐 [TIMER] RAG_CHAT_FALLBACK END: {time.strftime('%H:%M:%S', time.localtime(fallback_rag_end_time))} - Duration: {fallback_rag_duration:.3f}s")
+
                     result["route_used"] = "RAG_CHAT_FALLBACK"
-                    result["classification"] = classification_result
                     result["ragsmall_reason"] = "No results found"
+
+                    # 🕐 TOTAL END
+                    total_end_time = time.time()
+                    total_duration = total_end_time - total_start_time
+                    print(f"🕐 [TIMER] TOTAL END: {time.strftime('%H:%M:%S', time.localtime(total_end_time))} - Total Duration: {total_duration:.3f}s")
+                    print(f"🕐 [BREAKDOWN] Ragsmall Search: {ragsmall_search_duration:.3f}s | RAG_CHAT: {fallback_rag_duration:.3f}s")
+
                     return result
 
-                # Filter by category và lấy best match
-                category_results = []
-                found_categories = {}
+                # 🕐 Bước 2: Check threshold với best result
+                threshold_check_start_time = time.time()
+                print(f"🕐 [TIMER] THRESHOLD_CHECK START: {time.strftime('%H:%M:%S', time.localtime(threshold_check_start_time))}")
 
-                for doc, similarity in ragsmall_results:
-                    doc_category = doc.metadata.get('category', '').strip().upper()
+                # Sort by similarity và lấy best
+                ragsmall_results.sort(key=lambda x: x[1], reverse=True)
+                best_doc, best_similarity = ragsmall_results[0]
 
-                    # Track categories
-                    if doc_category in found_categories:
-                        found_categories[doc_category] += 1
-                    else:
-                        found_categories[doc_category] = 1
+                print(f"[RAGSMALL] Best similarity: {best_similarity:.3f}")
+                print(f"[RAGSMALL] Threshold check: {best_similarity:.3f} >= 0.8?")
 
-                    # Category matching (exact hoặc fuzzy)
-                    if doc_category == category or \
-                       doc_category.replace(' ', '') == category.replace(' ', '') or \
-                       (doc_category and category and doc_category in category) or \
-                       (doc_category and category and category in doc_category):
-                        category_results.append((doc, similarity))
+                if best_similarity >= 0.8:
+                    # Return answer từ ragsmall
+                    print(f"[SUCCESS] ragsmall match found (similarity: {best_similarity:.3f})")
 
-                print(f"[RAGSMALL] Found {len(ragsmall_results)} total, {len(category_results)} in category '{category}'")
-                print(f"[RAGSMALL] Categories found: {found_categories}")
+                    answer = best_doc.metadata.get('answer', '')
+                    matched_question = best_doc.page_content
+                    source = best_doc.metadata.get('source', '')
+                    category = best_doc.metadata.get('category', '')
 
-                # Nếu không có results trong category, thử fuzzy matching
-                if not category_results:
-                    for available_cat in found_categories.keys():
-                        if available_cat and category:
-                            if category.replace(' ', '').lower() in available_cat.replace(' ', '').lower() or \
-                               available_cat.replace(' ', '').lower() in category.replace(' ', '').lower():
-                                print(f"[RAGSMALL] Trying fuzzy match with '{available_cat}'")
-                                for doc, similarity in ragsmall_results:
-                                    if doc.metadata.get('category', '').strip().upper() == available_cat:
-                                        category_results.append((doc, similarity))
-                                break
+                    threshold_check_end_time = time.time()
+                    threshold_check_duration = threshold_check_end_time - threshold_check_start_time
+                    print(f"🕐 [TIMER] THRESHOLD_CHECK END: {time.strftime('%H:%M:%S', time.localtime(threshold_check_end_time))} - Duration: {threshold_check_duration:.3f}s")
 
-                # Bước 4: Check threshold với best result
-                if category_results:
-                    # Sort by similarity và lấy best
-                    category_results.sort(key=lambda x: x[1], reverse=True)
-                    best_doc, best_similarity = category_results[0]
+                    # 🕐 TOTAL END - SUCCESS
+                    total_end_time = time.time()
+                    total_duration = total_end_time - total_start_time
+                    print(f"🕐 [TIMER] TOTAL END: {time.strftime('%H:%M:%S', time.localtime(total_end_time))} - Total Duration: {total_duration:.3f}s")
+                    print(f"🕐 [BREAKDOWN] Ragsmall Search: {ragsmall_search_duration:.3f}s | Threshold Check: {threshold_check_duration:.3f}s")
 
-                    print(f"[RAGSMALL] Best similarity: {best_similarity:.3f}")
-                    print(f"[RAGSMALL] Threshold check: {best_similarity:.3f} >= 0.8?")
-
-                    if best_similarity >= 0.8:
-                        # Return answer từ ragsmall
-                        print(f"[SUCCESS] ragsmall match found (similarity: {best_similarity:.3f})")
-
-                        answer = best_doc.metadata.get('answer', '')
-                        matched_question = best_doc.page_content
-                        source = best_doc.metadata.get('source', '')
-
-                        return {
-                            "output": answer,
-                            "session_id": session_id or "ragsmall-session",
-                            "route_used": "RAGSMALL_MATCH",
-                            "classification": classification_result,
-                            "ragsmall_info": {
-                                "similarity_score": best_similarity,
-                                "matched_question": matched_question,
-                                "matched_category": category,
-                                "source": source,
-                                "total_results": len(ragsmall_results),
-                                "category_results": len(category_results)
-                            }
+                    return {
+                        "output": answer,
+                        "session_id": session_id or "ragsmall-session",
+                        "route_used": "RAGSMALL_MATCH",
+                        "ragsmall_info": {
+                            "similarity_score": best_similarity,
+                            "matched_question": matched_question,
+                            "matched_category": category,
+                            "source": source,
+                            "total_results": len(ragsmall_results)
+                        },
+                        "timing_info": {
+                            "total_duration": total_duration,
+                            "ragsmall_search_duration": ragsmall_search_duration,
+                            "threshold_check_duration": threshold_check_duration
                         }
+                    }
 
-                # Bước 5: Fallback to RAG_CHAT nếu similarity < 0.8 hoặc không có category match
-                print(f"[FALLBACK] ragsmall similarity < 0.8 or no category match → RAG_CHAT")
+                threshold_check_end_time = time.time()
+                threshold_check_duration = threshold_check_end_time - threshold_check_start_time
+                print(f"🕐 [TIMER] THRESHOLD_CHECK END: {time.strftime('%H:%M:%S', time.localtime(threshold_check_end_time))} - Duration: {threshold_check_duration:.3f}s")
+
+                # 🕐 Bước 3: Fallback to RAG_CHAT nếu similarity < 0.8
+                print(f"[FALLBACK] ragsmall similarity < 0.8 ({best_similarity:.3f}) → RAG_CHAT")
+
+                fallback_rag_start_time = time.time()
+                print(f"🕐 [TIMER] RAG_CHAT_FALLBACK START: {time.strftime('%H:%M:%S', time.localtime(fallback_rag_start_time))}")
+
                 result = await self.rag_chat.generate_response(query, session_id)
+
+                fallback_rag_end_time = time.time()
+                fallback_rag_duration = fallback_rag_end_time - fallback_rag_start_time
+                print(f"🕐 [TIMER] RAG_CHAT_FALLBACK END: {time.strftime('%H:%M:%S', time.localtime(fallback_rag_end_time))} - Duration: {fallback_rag_duration:.3f}s")
+
                 result["route_used"] = "RAG_CHAT_FALLBACK"
-                result["classification"] = classification_result
                 result["ragsmall_info"] = {
-                    "best_similarity": category_results[0][1] if category_results else 0.0,
+                    "best_similarity": best_similarity,
                     "total_results": len(ragsmall_results),
-                    "category_results": len(category_results),
-                    "found_categories": found_categories
+                    "best_category": best_doc.metadata.get('category', ''),
+                    "threshold_reason": f"Similarity {best_similarity:.3f} < 0.8"
                 }
+
+                # 🕐 TOTAL END
+                total_end_time = time.time()
+                total_duration = total_end_time - total_start_time
+                print(f"🕐 [TIMER] TOTAL END: {time.strftime('%H:%M:%S', time.localtime(total_end_time))} - Total Duration: {total_duration:.3f}s")
+                print(f"🕐 [BREAKDOWN] Ragsmall Search: {ragsmall_search_duration:.3f}s | Threshold Check: {threshold_check_duration:.3f}s | RAG_CHAT: {fallback_rag_duration:.3f}s")
+
                 return result
 
             except Exception as e:
                 print(f"[ERROR] ragsmall search failed: {e}")
-                # Fallback to RAG_CHAT on error
-                result = await self.rag_chat.generate_response(query, session_id)
-                result["route_used"] = "RAG_CHAT_ERROR_FALLBACK"
-                result["classification"] = classification_result
-                result["ragsmall_error"] = str(e)
-                return result
 
-            except Exception as e:
-                print(f"[ERROR] ragsmall search failed: {e}")
-                # Fallback to RAG_CHAT on error
+                # 🕐 Fallback to RAG_CHAT on error
+                error_fallback_start_time = time.time()
+                print(f"🕐 [TIMER] RAG_CHAT_ERROR_FALLBACK START: {time.strftime('%H:%M:%S', time.localtime(error_fallback_start_time))}")
+
                 result = await self.rag_chat.generate_response(query, session_id)
+
+                error_fallback_end_time = time.time()
+                error_fallback_duration = error_fallback_end_time - error_fallback_start_time
+                print(f"🕐 [TIMER] RAG_CHAT_ERROR_FALLBACK END: {time.strftime('%H:%M:%S', time.localtime(error_fallback_end_time))} - Duration: {error_fallback_duration:.3f}s")
+
                 result["route_used"] = "RAG_CHAT_ERROR_FALLBACK"
-                result["classification"] = classification_result
                 result["ragsmall_error"] = str(e)
+
+                # 🕐 TOTAL END
+                total_end_time = time.time()
+                total_duration = total_end_time - total_start_time
+                print(f"🕐 [TIMER] TOTAL END: {time.strftime('%H:%M:%S', time.localtime(total_end_time))} - Total Duration: {total_duration:.3f}s")
+                print(f"🕐 [BREAKDOWN] RAG_CHAT (Error): {error_fallback_duration:.3f}s")
+
                 return result
 
         except Exception as e:

@@ -19,7 +19,7 @@ class VectorStore:
         )
 
         # Initialize sparse embeddings for hybrid search
-        # self.sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25")
+        self.sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25")
 
         # Initialize Qdrant client
         self.client = QdrantClient(
@@ -41,11 +41,11 @@ class VectorStore:
                         distance=models.Distance.COSINE
                     )
                 },
-                # sparse_vectors_config={
-                #     "sparse": models.SparseVectorParams(
-                #         index=models.SparseIndexParams(on_disk=False)
-                #     )
-                # }
+                sparse_vectors_config={
+                    "sparse": models.SparseVectorParams(
+                        index=models.SparseIndexParams(on_disk=False)
+                    )
+                }
             )
             print(f"Created new Qdrant collection: {settings.collection_name}")
 
@@ -54,11 +54,11 @@ class VectorStore:
             client=self.client,
             collection_name=settings.collection_name,
             embedding=self.embeddings,
-            # sparse_embedding=self.sparse_embeddings,
-            # retrieval_mode=RetrievalMode.HYBRID,
-            retrieval_mode=RetrievalMode.DENSE,
+            sparse_embedding=self.sparse_embeddings,
+            retrieval_mode=RetrievalMode.HYBRID,
+            # retrieval_mode=RetrievalMode.DENSE,
             vector_name="dense",
-            # sparse_vector_name="sparse",
+            sparse_vector_name="sparse",
             content_payload_key="page_content",
             distance=models.Distance.COSINE,
             metadata_payload_key="metadata",
@@ -99,6 +99,7 @@ class VectorStore:
                 query_vector=("dense", query_embedding),  # Specify vector name
                 limit=k,
                 with_payload=True,
+                score_threshold=0.8
             )
         )
         print(f"Search result points count: {len(result)}")
@@ -154,7 +155,7 @@ class VectorStore:
                 query_vector=("dense", query_embedding),  # Specify vector name
                 limit=k,
                 with_payload=True,
-                score_threshold=None
+                score_threshold= 0.8,
             )
         )
         search_end_time = time.time()
@@ -384,9 +385,7 @@ class VectorStore:
         embedding_start_time = time.time()
 
         # Sử dụng embed_documents để batch tất cả queries
-        embeddings = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: self.embeddings.embed_documents(queries)
-        )
+        embeddings = await self.embeddings.aembed_documents(queries)
 
         embedding_end_time = time.time()
         embedding_time = embedding_end_time - embedding_start_time

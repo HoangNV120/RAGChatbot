@@ -10,17 +10,17 @@ logger = logging.getLogger(__name__)
 
 class PreRetrieval:
     def __init__(self):
-        # self.llm = ChatOpenAI(
-        #     model=settings.model_name,
-        #     temperature=0.3,  # Tăng temperature để có tính sáng tạo hơn cho query expansion
-        #     api_key=settings.openai_api_key,
-        #     max_tokens=300  # Tăng max_tokens để có thể sinh nhiều câu hỏi phụ hơn
-        # )
-        self.llm = MultiModelChatAPI(
-            api_key=settings.multi_model_api_key,
-            model_name="gpt-4o-mini",
-            api_url=settings.multi_model_api_url,
+        self.llm = ChatOpenAI(
+            model=settings.model_name,
+            temperature=0.3,  # Tăng temperature để có tính sáng tạo hơn cho query expansion
+            api_key=settings.openai_api_key,
+            max_tokens=300  # Tăng max_tokens để có thể sinh nhiều câu hỏi phụ hơn
         )
+        # self.llm = MultiModelChatAPI(
+        #     api_key=settings.multi_model_api_key,
+        #     model_name="gpt-4o-mini",
+        #     api_url=settings.multi_model_api_url,
+        # )
 
         # Optimized prompt using structured approach with clear delimiters
         self.subquery_prompt = """<ROLE>Query Analysis Expert</ROLE>
@@ -32,30 +32,67 @@ class PreRetrieval:
 </INPUT_QUERY>
 
 <PROCESSING_RULES>
-COMPLEX Questions (multiple subjects/concepts/requires reasoning):
-→ Generate EXACTLY 3 questions: original + 2 sub-questions
-→ Each sub-question focuses on 1 specific aspect
-→ Original question always comes first
+COMPLEX Questions (generate EXACTLY 3 questions):
+→ Questions with TWO OR MORE clearly distinct subjects/entities mentioned
+→ Questions requiring COMPARISON between different subjects/entities  
+→ Questions with multiple independent conditions in the same sentence
+→ Examples: "A vs B", "A hay B", "A và B có gì khác nhau"
 
-SIMPLE Questions (single clear topic):
-→ Generate EXACTLY 1 question (rewrite original for clarity)
-→ Use standard keywords and formal terminology
+SIMPLE Questions (generate EXACTLY 1 question):
+→ Questions about ONE main subject/entity (even with multiple attributes like rules, requirements, conditions)
+→ Questions asking about conditions/requirements/rules/processes of a SINGLE subject
+→ Direct factual questions about one specific thing
+→ Questions with clear, single focus
+
+IMPORTANT DISTINCTION:
+- "Em cần điều kiện gì để đi thực tập?" → SIMPLE (one subject: thực tập)
+- "KTX có luật lệ gì?" → SIMPLE (one subject: KTX)  
+- "SWR302 hay FER202 lớn % hơn?" → COMPLEX (two subjects: SWR302 và FER202)
+- "Nếu PRO192 được 4 điểm thì có học được PRJ301 không?" → COMPLEX (two subjects: PRO192 và PRJ301)
 </PROCESSING_RULES>
 
 <CONSTRAINTS>
-• Total questions: MAX 3
-• Complex → EXACTLY 3 questions
-• Simple → EXACTLY 1 question
+• Complex questions → EXACTLY 3 questions (original + 2 focused sub-questions)
+• Simple questions → EXACTLY 1 question (rewritten for clarity)
+• Sub-questions must focus on specific aspects of the original query
 </CONSTRAINTS>
 
-<EXAMPLES>
-Complex: "Nếu tôi được 4 điểm tổng kết môn PRO192 thì có được học môn PRJ301 không?"
-Output:
-Nếu tôi được 4 điểm tổng kết môn PRO192 thì có được học môn PRJ301 không?
-Điều kiện tiên quyết để học môn PRJ301 là gì?
-Môn PRO192 cần đạt điểm tổng kết bao nhiêu để qua môn?
+<CLASSIFICATION_EXAMPLES>
+COMPLEX (multiple distinct subjects/entities):
+- "Assignment SWR302 hay FER202 lớn % hơn?" (SWR302 vs FER202)
+- "Nếu tôi được 4 điểm PRO192 thì có được học PRJ301 không?" (PRO192 và PRJ301)
+- "Học phí và lệ phí khác nhau như thế nào?" (học phí vs lệ phí)
 
-Simple: "làm sao đăng ký học phần"
+SIMPLE (one main subject, even with complex attributes):
+- "Em cần đáp ứng điều kiện gì để được đi thực tập?" (one subject: thực tập)
+- "KTX có luật lệ gì cần nhớ hông?" (one subject: KTX)
+- "Làm thế nào để đăng ký học phần?" (one subject: đăng ký học phần)
+- "Học phí năm nay là bao nhiêu?" (one subject: học phí)
+- "PRJ301 có những yêu cầu tiên quyết gì?" (one subject: PRJ301)
+</CLASSIFICATION_EXAMPLES>
+
+<EXAMPLES>
+Complex: "Assignment SWR302 hay FER202 lớn % hơn?"
+Output:
+Assignment SWR302 hay FER202 lớn % hơn?
+Assignment SWR302 chiếm bao nhiêu phần trăm tổng điểm?
+Assignment FER202 chiếm bao nhiêu phần trăm tổng điểm?
+
+Complex: "Nếu tôi được 4 điểm PRO192 thì có được học PRJ301 không?"
+Output:
+Nếu tôi được 4 điểm PRO192 thì có được học PRJ301 không?
+Điều kiện tiên quyết để học môn PRJ301 là gì?
+Môn PRO192 cần đạt điểm bao nhiêu để qua môn?
+
+Simple: "Em cần đáp ứng điều kiện gì để được đi thực tập?"
+Output:
+Em cần đáp ứng điều kiện gì để được đi thực tập?
+
+Simple: "KTX có luật lệ gì cần nhớ hông?"
+Output:
+KTX có luật lệ gì cần nhớ?
+
+Simple: "Làm thế nào để đăng ký học phần?"
 Output:
 Làm thế nào để đăng ký học phần?
 </EXAMPLES>
@@ -68,12 +105,11 @@ Làm thế nào để đăng ký học phần?
 </OUTPUT_FORMAT>
 
 <INSTRUCTIONS>
-1. Analyze INPUT_QUERY complexity
-2. Apply appropriate PROCESSING_RULES
-3. Generate questions following OUTPUT_FORMAT
-</INSTRUCTIONS>
-
-Process the query above:"""
+1. Count distinct subjects/entities in INPUT_QUERY
+2. If 2+ distinct subjects/entities OR comparison → COMPLEX (3 questions)
+3. If 1 main subject (regardless of complexity) → SIMPLE (1 question)
+4. Generate questions following OUTPUT_FORMAT
+</INSTRUCTIONS>"""
 
     async def analyze_and_rewrite(self, query: str) -> Dict[str, any]:
         """
