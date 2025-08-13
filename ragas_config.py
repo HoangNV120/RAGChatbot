@@ -5,15 +5,13 @@ Cấu hình các metrics và settings cho đánh giá RAG system
 
 from ragas.metrics import (
     faithfulness,
-    answer_relevancy,
     answer_similarity
 )
 
 # RAGAS Metrics Configuration - Chỉ 3 metrics chính
 RAGAS_METRICS = [
     answer_similarity,      # Đo độ tương đồng ngữ nghĩa với ground truth
-    faithfulness,           # Đo độ trung thực của câu trả lời dựa trên context
-    answer_relevancy,       # Đo độ liên quan của câu trả lời với câu hỏi
+    faithfulness,           # Đo độ trung thực của câu trả lời dựa trên context      # Đo độ liên quan của câu trả lời với câu hỏi
 ]
 
 # Evaluation settings
@@ -44,9 +42,4 @@ QUALITY_THRESHOLDS = {
         'good': 0.6,
         'acceptable': 0.4
     },
-    'answer_relevancy': {
-        'excellent': 0.8,
-        'good': 0.6,
-        'acceptable': 0.4
-    }
 }

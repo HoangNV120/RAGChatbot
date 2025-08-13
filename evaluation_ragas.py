@@ -12,7 +12,6 @@ try:
     from ragas import evaluate
     from ragas.metrics import (
         faithfulness,
-        answer_relevancy,
         answer_similarity
     )
     from datasets import Dataset
@@ -336,7 +335,7 @@ class RAGASEvaluator:
                 embeddings=embeddings_wrapper
             )
 
-            # Extract scores - chỉ 3 metrics: answer_similarity, faithfulness, answer_relevancy
+            # Extract scores - chỉ 2 metrics: answer_similarity, faithfulness
             if hasattr(evaluation_result, 'to_pandas'):
                 eval_df = evaluation_result.to_pandas()
                 print(eval_df)
@@ -344,22 +343,19 @@ class RAGASEvaluator:
                     first_row = eval_df.iloc[0]
                     result.update({
                         'answer_similarity': float(first_row.get('semantic_similarity', 0.0)),
-                        'faithfulness': float(first_row.get('faithfulness', 0.0)),
-                        'answer_relevancy': float(first_row.get('answer_relevancy', 0.0))
+                        'faithfulness': float(first_row.get('faithfulness', 0.0))
                     })
                 else:
                     # Set default values if no results
                     result.update({
                         'answer_similarity': 0.0,
-                        'faithfulness': 0.0,
-                        'answer_relevancy': 0.0
+                        'faithfulness': 0.0
                     })
             else:
                 # Fallback for different RAGAS return format
                 result.update({
                     'answer_similarity': float(evaluation_result.get('semantic_similarity', 0.0)),
-                    'faithfulness': float(evaluation_result.get('faithfulness', 0.0)),
-                    'answer_relevancy': float(evaluation_result.get('answer_relevancy', 0.0))
+                    'faithfulness': float(evaluation_result.get('faithfulness', 0.0))
                 })
 
             print(f"✅ Question {index + 1} evaluated successfully")
@@ -367,14 +363,12 @@ class RAGASEvaluator:
             print(f"   Route: {rag_result['route_used']}")
             print(f"   Answer Similarity: {result.get('answer_similarity', 0):.3f}")
             print(f"   Faithfulness: {result.get('faithfulness', 0):.3f}")
-            print(f"   Answer Relevancy: {result.get('answer_relevancy', 0):.3f}")
 
         except Exception as e:
             logger.error(f"Error in RAGAS evaluation for question {index + 1}: {e}")
             result.update({
                 'answer_similarity': 0.0,
                 'faithfulness': 0.0,
-                'answer_relevancy': 0.0,
                 'evaluation_error': str(e)
             })
 
@@ -417,13 +411,13 @@ class RAGASEvaluator:
 
     def calculate_statistics(self) -> Dict:
         """
-        Tính toán thống kê tổng hợp - chỉ 3 metrics: answer_similarity, faithfulness, answer_relevancy
+        Tính toán thống kê tổng hợp - chỉ 2 metrics: answer_similarity, faithfulness
         """
         if not self.results:
             return {}
 
         # Extract numeric metrics - chỉ 3 metrics chính (sửa tên metric đúng)
-        metrics = ['answer_similarity', 'faithfulness', 'answer_relevancy']
+        metrics = ['answer_similarity', 'faithfulness']
 
         stats = {
             'total_questions': len(self.results),
