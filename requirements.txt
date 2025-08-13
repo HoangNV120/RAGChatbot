@@ -26,3 +26,5 @@ google-api-python-client
 schedule
 sse-starlette
 asyncio
+scikit-learn
+fastembed
