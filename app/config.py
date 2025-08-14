@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     hybrid_alpha: float = float(os.getenv("HYBRID_ALPHA", "0.5"))  # Weight for hybrid search
 
     # LLM settings
-    model_name: str = os.getenv("MODEL_NAME", "gpt-4o-mini")
+    model_name: str = os.getenv("MODEL_NAME")
     temperature: float = float(os.getenv("TEMPERATURE", "0.1"))
 
     # Embedding settings

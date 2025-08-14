@@ -1,7 +1,6 @@
 from langchain_community.document_loaders import DirectoryLoader, TextLoader, JSONLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from app.vector_store import VectorStore
-from app.smart_router import SmartQueryRouter
 from app.syllabus_converter import SyllabusConverter
 import os
 import asyncio
@@ -33,9 +32,6 @@ class DocumentProcessor:
             length_function=len,
         )
         self.vector_store = VectorStore()
-
-        # Initialize Smart Router for routing questions
-        self.smart_router = SmartQueryRouter()
         
         # Initialize Syllabus Converter for course data
         self.syllabus_converter = SyllabusConverter()
