@@ -12,13 +12,13 @@ class PreRetrieval:
     def __init__(self):
         self.llm = ChatOpenAI(
             model=settings.model_name,
-            temperature=0.3,  # Tăng temperature để có tính sáng tạo hơn cho query expansion
+            temperature=0,  # Tăng temperature để có tính sáng tạo hơn cho query expansion
             api_key=settings.openai_api_key,
             max_tokens=300  # Tăng max_tokens để có thể sinh nhiều câu hỏi phụ hơn
         )
         # self.llm = MultiModelChatAPI(
         #     api_key=settings.multi_model_api_key,
-        #     model_name="gpt-4o-mini",
+        #     model_name="gpt-4.1-mini",
         #     api_url=settings.multi_model_api_url,
         # )
 
