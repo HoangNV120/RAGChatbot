@@ -63,13 +63,18 @@ IF Context parts combine for clear conclusion → Provide logical conclusion
 
         # Sử dụng singleton LLM để tránh tạo mới nhiều lần - WITH STREAMING
         if RAGChatStreaming._llm_instance is None:
-            RAGChatStreaming._llm_instance = ChatOpenAI(
-                model=settings.model_name,
-                temperature=settings.temperature,
-                api_key=settings.openai_api_key,
-                max_retries=2,
-                timeout=30,
-                streaming=True,  # ENABLE STREAMING
+            # RAGChatStreaming._llm_instance = ChatOpenAI(
+            #     model=settings.model_name,
+            #     temperature=settings.temperature,
+            #     api_key=settings.openai_api_key,
+            #     max_retries=2,
+            #     timeout=30,
+            #     streaming=True,  # ENABLE STREAMING
+            # )
+            RAGChatStreaming._llm_instance = MultiModelChatAPI(
+                api_key=settings.multi_model_api_key,
+                model="gpt-4o-mini",
+                api_url=settings.multi_model_api_url,
             )
         self.llm = RAGChatStreaming._llm_instance
 
@@ -101,15 +106,6 @@ IF Context parts combine for clear conclusion → Provide logical conclusion
         """Đảm bảo graph đã được khởi tạo"""
         if self.graph_app is None:
             self.graph_app = await self._build_graph()
-
-    @lru_cache(maxsize=128)
-    def _format_prompt_cached(self, system_prompt: str, context: str, question: str) -> str:
-        """Cache prompt formatting để tránh format lại"""
-        return self.prompt_template.format(
-            system_prompt=system_prompt,
-            context=context,
-            question=question
-        )
 
     async def _build_graph(self):
         """Build LangGraph WITHOUT memory checkpointer cho streaming - tương tự RAGChat"""
@@ -172,10 +168,10 @@ IF Context parts combine for clear conclusion → Provide logical conclusion
             else:
                 context = "Không tìm thấy thông tin liên quan."
 
-            prompt = self._format_prompt_cached(
-                self.system_prompt,
-                context,
-                question
+            prompt = self.prompt_template.format(
+                system_prompt=self.system_prompt,
+                context=context,
+                question=question
             )
 
             print(f"🔄 [STREAMING] Context length: {len(context)} characters")
@@ -282,10 +278,10 @@ IF Context parts combine for clear conclusion → Provide logical conclusion
                 context = "Không tìm thấy thông tin liên quan."
 
             # Format prompt
-            prompt = self._format_prompt_cached(
-                self.system_prompt,
-                context,
-                processed_query
+            prompt = self.prompt_template.format(
+                system_prompt=self.system_prompt,
+                context=context,
+                question=query
             )
 
             print(f"🔄 [TRUE STREAMING] Context length: {len(context)} characters")

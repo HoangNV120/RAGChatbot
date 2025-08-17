@@ -322,50 +322,13 @@ class DocumentProcessor:
                 None, lambda: self.text_splitter.split_documents(all_documents)
             )
 
-            # Add documents to both vector stores
-            # 1. Add to main vector store (RAG format with full content)
+            # Add to main vector store (RAG format with full content)
             await self.vector_store.add_documents(splits)
             print(f"Added {len(splits)} chunks to main vector store")
-
-            # 2. Add to routing vector store (only questions for embedding)
-            routing_documents = []
-            for doc in all_documents:
-                # Extract question from the RAG format content
-                content = doc.page_content
-                if content.startswith("Question: "):
-                    # Extract just the question part
-                    question_part = content.split("\nAnswer: ")[0].replace("Question: ", "")
-                    # Extract answer part
-                    answer_part = content.split("\nAnswer: ")[1] if "\nAnswer: " in content else ""
-
-                    # Create routing document with only question as content
-                    routing_doc = Document(
-                        page_content=question_part,  # Only question for embedding
-                        metadata={
-                            "answer": answer_part,  # Answer stored in metadata
-                            "category": "FQA",
-                            "source": doc.metadata.get("source", "excel")
-                        }
-                    )
-                    routing_documents.append(routing_doc)
-
-            if routing_documents:
-                await self.smart_router.routing_vector_store.add_questions(routing_documents)
-                print(f"Added {len(routing_documents)} questions to routing vector store")
-            else:
-                print("No routing documents created from FQA data")
-
-            print(f"Processed {len(processed_files)} Excel files with FQA data, created {len(splits)} chunks")
 
             # Delete Excel files after successful processing if requested
             if delete_after_load and processed_files:
                 await self._delete_processed_files(processed_files, "Excel")
-
-                # Also delete corresponding routing questions
-                for excel_file in processed_files:
-                    await self.smart_router.routing_vector_store.delete_questions_by_source(excel_file)
-                    print(f"Deleted routing questions from source: {excel_file}")
-
             return splits
 
         except Exception as e:
