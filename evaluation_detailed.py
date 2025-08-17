@@ -435,7 +435,7 @@ class DetailedEvaluation:
 
             # ✅ Thêm RAG Chat Latency và Ragsmall Latency
             "Avg_RAG_Chat_Latency_s": np.mean([
-                r["pre_retrieval_time"] + r["embedding_time"] + r["vector_search_time"] + r["generation_time"]
+                r["master_chatbot_time"]  # ✅ Sử dụng thời gian thực tế từ đầu đến cuối cho RAG_CHAT
                 for r in results if "FALLBACK" in r["route_used"] or "RAG_CHAT" in r["route_used"]
             ]) if [r for r in results if "FALLBACK" in r["route_used"] or "RAG_CHAT" in r["route_used"]] else 0.0,
 

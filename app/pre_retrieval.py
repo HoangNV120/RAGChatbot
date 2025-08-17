@@ -13,7 +13,8 @@ logger = logging.getLogger(__name__)
 class PreRetrieval:
     def __init__(self):
         self.llm = ChatOpenAI(
-            model=settings.model_name,
+            # model=settings.model_name,
+            model="gpt-4o-mini",  # Sử dụng mô hình nhỏ gọn để tiết kiệm chi phí
             temperature=0,  # Tăng temperature để có tính sáng tạo hơn cho query expansion
             api_key=settings.openai_api_key,
             max_tokens=300  # Tăng max_tokens để có thể sinh nhiều câu hỏi phụ hơn
