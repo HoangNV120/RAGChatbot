@@ -198,7 +198,24 @@ class DetailedEvaluation:
 
                     # Lấy generation metrics thực tế từ vector_metrics (đã được combine)
                     metrics["generation_time"] = vector_metrics.get("generation_time", 0)
-                    metrics["generation_cost"] = vector_metrics.get("generation_cost", 0)
+
+                    # ✅ Ưu tiên sử dụng generation_cost từ vector_metrics nếu có
+                    if vector_metrics.get("generation_cost", 0) > 0:
+                        metrics["generation_cost"] = vector_metrics.get("generation_cost", 0)
+                    else:
+                        # Fallback: tính manual nếu vector_metrics không có generation_cost
+                        if metrics["actual_answer"]:
+                            subqueries = response.get("subqueries", [question])
+                            estimated_context = " ".join([f"Context for: {sq[:100]}" for sq in subqueries])
+                            full_prompt = f"System prompt + Context: {estimated_context} + Question: {question}"
+
+                            gen_input_cost, gen_output_cost, _, _ = self.calculate_llm_cost(
+                                full_prompt, metrics["actual_answer"]
+                            )
+                            metrics["generation_cost"] = gen_input_cost + gen_output_cost
+                        else:
+                            metrics["generation_cost"] = 0
+
                     generation_tokens = vector_metrics.get("total_tokens", 0)
 
                     print(f"   🤖 Generation time: {metrics['generation_time']:.3f}s")
@@ -251,25 +268,6 @@ class DetailedEvaluation:
                     print(f"   🔍 Estimated vector search time: {metrics['vector_search_time']:.3f}s")
                     print(f"   🤖 Estimated generation time: {metrics['generation_time']:.3f}s")
                     print(f"   💰 RAG embedding cost: ${total_embedding_cost:.6f} (estimated)")
-                    print(f"   💰 Estimated generation cost: ${metrics['generation_cost']:.6f}")
-
-                # Estimate generation time (phần còn lại)
-                used_time = metrics.get("pre_retrieval_time", 0) + metrics.get("embedding_time", 0) + metrics.get("vector_search_time", 0)
-                metrics["generation_time"] = max(0, metrics["master_chatbot_time"] - used_time)
-
-                print(f"   🤖 Estimated generation time: {metrics['generation_time']:.3f}s")
-
-                # Estimate generation cost
-                if metrics["actual_answer"]:
-                    # Estimate context từ subqueries
-                    subqueries = response.get("subqueries", [question])
-                    estimated_context = " ".join([f"Context for: {sq[:100]}" for sq in subqueries])
-                    full_prompt = f"System prompt + Context: {estimated_context} + Question: {question}"
-
-                    gen_input_cost, gen_output_cost, _, _ = self.calculate_llm_cost(
-                        full_prompt, metrics["actual_answer"]
-                    )
-                    metrics["generation_cost"] = gen_input_cost + gen_output_cost
                     print(f"   💰 Estimated generation cost: ${metrics['generation_cost']:.6f}")
 
             else:
@@ -451,6 +449,17 @@ class DetailedEvaluation:
             "Avg_Embedding_Cost_USD": np.mean([r["embedding_cost"] for r in results if r["embedding_cost"] > 0]),
             "Avg_Generation_Cost_USD": np.mean([r["generation_cost"] for r in results if r["generation_cost"] > 0]),
             "Avg_Total_Cost_USD": np.mean([r["total_cost"] for r in results]),
+
+            # ✅ Thêm RAG Chat Cost và Ragsmall Cost
+            "Avg_RAG_Chat_Cost_USD": np.mean([
+                r["total_cost"]  # ✅ Lấy total_cost (đã bao gồm tất cả) cho RAG_CHAT route
+                for r in results if "FALLBACK" in r["route_used"] or "RAG_CHAT" in r["route_used"]
+            ]) if [r for r in results if "FALLBACK" in r["route_used"] or "RAG_CHAT" in r["route_used"]] else 0.0,
+
+            "Avg_Ragsmall_Cost_USD": np.mean([
+                r["ragsmall_search_cost"]  # ✅ Chỉ lấy ragsmall cost cho RAGSMALL_MATCH route
+                for r in results if r["route_used"] == "RAGSMALL_MATCH"
+            ]) if [r for r in results if r["route_used"] == "RAGSMALL_MATCH"] else 0.0,
 
             # Totals
             "Total_Cost_USD": np.sum([r["total_cost"] for r in results]),
