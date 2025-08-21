@@ -12,7 +12,6 @@ from langchain_openai import ChatOpenAI
 from langchain_community.callbacks.manager import get_openai_callback
 from app.vector_store import VectorStore
 from app.pre_retrieval import PreRetrieval
-from app.post_retrieval import PostRetrieval
 from app.config import settings
 from app.MultiModelChatAPI import MultiModelChatAPI
 
@@ -34,7 +33,6 @@ class RAGChat:
     def __init__(self, vector_store: Optional[VectorStore] = None):
         self.vector_store = vector_store if vector_store else VectorStore()
         self.query_rewriter = PreRetrieval()
-        self.post_retrieval = PostRetrieval()
 
         # Optimized system prompt using structured approach
         self.system_prompt = """<ROLE>Trợ lý Sinh viên FPTU</ROLE>

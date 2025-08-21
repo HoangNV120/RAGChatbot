@@ -18,8 +18,8 @@ class VectorStore:
             api_key=settings.openai_api_key,
         )
 
-        # Initialize sparse embeddings for hybrid search
-        self.sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25")
+        # # Initialize sparse embeddings for hybrid search
+        # self.sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25")
 
         # Initialize Qdrant client
         self.client = QdrantClient(
@@ -41,11 +41,11 @@ class VectorStore:
                         distance=models.Distance.COSINE
                     )
                 },
-                sparse_vectors_config={
-                    "sparse": models.SparseVectorParams(
-                        index=models.SparseIndexParams(on_disk=False)
-                    )
-                }
+                # sparse_vectors_config={
+                #     "sparse": models.SparseVectorParams(
+                #         index=models.SparseIndexParams(on_disk=False)
+                #     )
+                # }
             )
             print(f"Created new Qdrant collection: {settings.collection_name}")
 
@@ -54,7 +54,7 @@ class VectorStore:
             client=self.client,
             collection_name=settings.collection_name,
             embedding=self.embeddings,
-            sparse_embedding=self.sparse_embeddings,
+            # sparse_embedding=self.sparse_embeddings,
             # retrieval_mode=RetrievalMode.HYBRID,
             retrieval_mode=RetrievalMode.DENSE,
             vector_name="dense",
