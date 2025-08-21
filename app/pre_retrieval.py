@@ -123,7 +123,6 @@ Thông tin về học bổng
 2. If 2+ distinct subjects/entities OR comparison → COMPLEX (3 queries)
 3. If 1 main subject (regardless of complexity) → SIMPLE (1 query)
 4. Generate queries following OUTPUT_FORMAT
-5. Handle all query types: questions, statements, requests, commands
 </INSTRUCTIONS>"""
 
     async def analyze_and_rewrite(self, query: str) -> Dict[str, any]:

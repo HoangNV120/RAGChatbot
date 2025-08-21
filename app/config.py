@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     temperature: float = float(os.getenv("TEMPERATURE", "0.1"))
 
     # Embedding settings
-    embedding_model: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")  # OpenAI's small embedding model
+    embedding_model: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")  # OpenAI's small embedding model
 
     # Dimension for embeddings and vector store
     dimension: int = int(os.getenv("DIMENSION", "3072"))  # Default for OpenAI's text-embedding-3-large

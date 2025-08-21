@@ -45,7 +45,7 @@ class DetailedEvaluation:
 
         # Pricing (USD per 1K tokens) - cập nhật theo giá mới nhất
         self.pricing = {
-            "embedding_input": 0.00002,  # text-embedding-3-large
+            "embedding_input": 0.000065,  # text-embedding-3-large
             "llm_input": 0.00015,        # gpt-4o-mini input
             "llm_output": 0.0006         # gpt-4o-mini output
         }

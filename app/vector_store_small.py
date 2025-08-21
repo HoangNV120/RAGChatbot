@@ -14,7 +14,8 @@ class VectorStoreSmall:
     def __init__(self):
         # Initialize the embedding model (same as main VectorStore)
         self.embeddings = OpenAIEmbeddings(
-            model=settings.embedding_model,
+            # model=settings.embedding_model,
+            model="text-embedding-3-large",  # Sử dụng mô hình nhỏ gọn để tiết kiệm chi phí
             api_key=settings.openai_api_key,
         )
 

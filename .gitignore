@@ -25,6 +25,9 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+visualizations/
+
+
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -240,3 +243,7 @@ gradio_cached_examples/
 .pytest_cache/
 
 chat-sessions.*
+
+.deepeval/
+.benchmarks/
+

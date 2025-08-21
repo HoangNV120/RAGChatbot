@@ -58,7 +58,7 @@ class VectorStore:
             # retrieval_mode=RetrievalMode.HYBRID,
             retrieval_mode=RetrievalMode.DENSE,
             vector_name="dense",
-            sparse_vector_name="sparse",
+            # sparse_vector_name="sparse",
             content_payload_key="page_content",
             distance=models.Distance.COSINE,
             metadata_payload_key="metadata",

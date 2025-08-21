@@ -63,19 +63,19 @@ IF Context parts combine for clear conclusion → Provide logical conclusion
 
         # Sử dụng singleton LLM để tránh tạo mới nhiều lần - WITH STREAMING
         if RAGChatStreaming._llm_instance is None:
-            # RAGChatStreaming._llm_instance = ChatOpenAI(
-            #     model=settings.model_name,
-            #     temperature=settings.temperature,
-            #     api_key=settings.openai_api_key,
-            #     max_retries=2,
-            #     timeout=30,
-            #     streaming=True,  # ENABLE STREAMING
-            # )
-            RAGChatStreaming._llm_instance = MultiModelChatAPI(
-                api_key=settings.multi_model_api_key,
-                model="gpt-4o-mini",
-                api_url=settings.multi_model_api_url,
+            RAGChatStreaming._llm_instance = ChatOpenAI(
+                model=settings.model_name,
+                temperature=settings.temperature,
+                api_key=settings.openai_api_key,
+                max_retries=2,
+                timeout=30,
+                streaming=True,  # ENABLE STREAMING
             )
+            # RAGChatStreaming._llm_instance = MultiModelChatAPI(
+            #     api_key=settings.multi_model_api_key,
+            #     model="gpt-4o-mini",
+            #     api_url=settings.multi_model_api_url,
+            # )
         self.llm = RAGChatStreaming._llm_instance
 
         # Optimized prompt template with clear structure and delimiters
@@ -243,10 +243,13 @@ IF Context parts combine for clear conclusion → Provide logical conclusion
 
             try:
                 # Parallel retrieval
-                all_results = await asyncio.wait_for(
+                batch_result = await asyncio.wait_for(
                     self.vector_store.batch_similarity_search(subqueries, k=k_per_query),
                     timeout=15.0
                 )
+
+                all_results = batch_result["results"]  # ✅ Extract results from dictionary
+                vector_metrics = batch_result["metrics"]  # ✅ Also get metrics for consistency
 
                 # Combine results
                 combined_docs = []

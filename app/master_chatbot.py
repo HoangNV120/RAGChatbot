@@ -303,7 +303,7 @@ class MasterChatbot:
                             "route_used": "RAGSMALL_MATCH",
                             "timestamp": time.time()
                         }
-                        await asyncio.sleep(0.02)  # Faster streaming - 20ms delay
+                        await asyncio.sleep(0.01)  # Faster streaming - 20ms delay
 
                     # 🕐 TOTAL END - SUCCESS
                     total_end_time = time.time()
