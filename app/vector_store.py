@@ -18,7 +18,7 @@ class VectorStore:
             api_key=settings.openai_api_key,
         )
 
-        # # Initialize sparse embeddings for hybrid search
+        # # # Initialize sparse embeddings for hybrid search
         # self.sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25")
 
         # Initialize Qdrant client
@@ -59,7 +59,7 @@ class VectorStore:
             retrieval_mode=RetrievalMode.DENSE,
             vector_name="dense",
             # sparse_vector_name="sparse",
-            content_payload_key="page_content",
+            # content_payload_key="page_content",
             distance=models.Distance.COSINE,
             metadata_payload_key="metadata",
 
@@ -100,7 +100,6 @@ class VectorStore:
                 query_vector=("dense", query_embedding),  # Specify vector name
                 limit=k,
                 with_payload=True,
-                score_threshold=0.8
             )
         )
         print(f"RAG main vector search result points count: {len(result)}")
@@ -165,7 +164,6 @@ class VectorStore:
                 query_vector=("dense", query_embedding),  # Specify vector name
                 limit=k,
                 with_payload=True,
-                score_threshold= 0.8,
             )
         )
         rag_search_end_time = time.time()
